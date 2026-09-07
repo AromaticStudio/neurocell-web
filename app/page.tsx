@@ -212,32 +212,32 @@ export default function Home() {
         </div>
 
         {/* 하단 내비게이션 바 */}
-        <nav className="bottom-nav">
+        <nav className="tabbar">
           <button
             type="button"
             onClick={() => setCurrentTab('today')}
-            className={`nav-item ${currentTab === 'today' ? 'active' : ''}`}
+            className={`tab-item ${currentTab === 'today' ? 'active' : ''}`}
           >
-            <span className="nav-ic">📅</span>
-            <span className="nav-lb">투데이</span>
+            <span className="ic">📅</span>
+            <span>투데이</span>
           </button>
 
           <button
             type="button"
             onClick={() => setCurrentTab('class')}
-            className={`nav-item ${currentTab === 'class' ? 'active' : ''}`}
+            className={`tab-item ${currentTab === 'class' ? 'active' : ''}`}
           >
-            <span className="nav-ic">🎓</span>
-            <span className="nav-lb">클래스</span>
+            <span className="ic">🎓</span>
+            <span>클래스</span>
           </button>
 
           <button
             type="button"
             onClick={() => setCurrentTab('record')}
-            className={`nav-item ${currentTab === 'record' ? 'active' : ''}`}
+            className={`tab-item ${currentTab === 'record' ? 'active' : ''}`}
           >
-            <span className="nav-ic">📊</span>
-            <span className="nav-lb">나의 기록</span>
+            <span className="ic">📊</span>
+            <span>나의 기록</span>
           </button>
         </nav>
 
