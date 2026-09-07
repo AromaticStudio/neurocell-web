@@ -2,6 +2,8 @@
 
 import React, { useState } from 'react';
 
+const [activeTab, setActiveTab] = useState<'today' | 'class' | 'record'>('today');
+
 const INITIAL_MISSIONS = [
   { id: 'water', group: 'essential', icon: '💧', title: '수분섭취 · Water Intake', sub: '하루 1.5~2L', done: false },
   { id: 'juice', group: 'essential', icon: '🥤', title: 'PM 주스 섭취 · PM Juice', sub: '파워칵테일 · 액티바이즈', done: false },
@@ -211,30 +213,43 @@ export default function Home() {
           )}
         </div>
 
-        {/* 하단 고정 탭바 */}
-        <div className="tabbar">
-          <button
-            className={`tab-item ${currentTab === 'today' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('today')}
-          >
-            <span className="ic">🎯</span>
-            투데이
-          </button>
-          <button
-            className={`tab-item ${currentTab === 'class' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('class')}
-          >
-            <span className="ic">🎬</span>
-            클래스
-          </button>
-          <button
-            className={`tab-item ${currentTab === 'record' ? 'active' : ''}`}
-            onClick={() => setCurrentTab('record')}
-          >
-            <span className="ic">📈</span>
-            나의 기록
-          </button>
-        </div>
+        {/* 하단 내비게이션 바 */}
+<nav className="fixed bottom-0 left-0 right-0 z-50 bg-[#121212]/95 backdrop-blur border-t border-white/10">
+  <div className="max-w-md mx-auto flex items-center justify-around h-16 px-4">
+    {/* 1. 투데이 버튼 */}
+    <button 
+      onClick={() => setActiveTab('today')}
+      className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors ${
+        activeTab === 'today' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+      }`}
+    >
+      <span className="text-xl mb-0.5">📅</span>
+      <span className="text-xs">투데이</span>
+    </button>
+
+    {/* 2. 클래스 버튼 */}
+    <button 
+      onClick={() => setActiveTab('class')}
+      className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors ${
+        activeTab === 'class' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+      }`}
+    >
+      <span className="text-xl mb-0.5">🎓</span>
+      <span className="text-xs">클래스</span>
+    </button>
+
+    {/* 3. 나의 기록 버튼 */}
+    <button 
+      onClick={() => setActiveTab('record')}
+      className={`flex-1 flex flex-col items-center justify-center py-1 transition-colors ${
+        activeTab === 'record' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+      }`}
+    >
+      <span className="text-xl mb-0.5">📊</span>
+      <span className="text-xs">나의 기록</span>
+    </button>
+  </div>
+</nav>
 
       </div>
     </main>
