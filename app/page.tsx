@@ -2,8 +2,6 @@
 
 import React, { useState } from 'react';
 
-const [activeTab, setActiveTab] = useState<'today' | 'class' | 'record'>('today');
-
 const INITIAL_MISSIONS = [
   { id: 'water', group: 'essential', icon: '💧', title: '수분섭취 · Water Intake', sub: '하루 1.5~2L', done: false },
   { id: 'juice', group: 'essential', icon: '🥤', title: 'PM 주스 섭취 · PM Juice', sub: '파워칵테일 · 액티바이즈', done: false },
@@ -68,7 +66,7 @@ export default function Home() {
   const totalPercent = Math.round(((essentialDone + wellbeingDone) / missions.length) * 100);
 
   return (
-    <main className="app-shell">
+    <main className="app-shell pb-20">
       <div className="device-screen">
         
         {/* 폭죽 및 빵빠레 팝업 */}
@@ -214,42 +212,42 @@ export default function Home() {
         </div>
 
         {/* 하단 내비게이션 바 */}
-<div className="fixed bottom-0 left-0 w-full z-50 bg-[#121212]/95 backdrop-blur border-t border-white/10 flex justify-center">
-  <nav className="w-full max-w-md grid grid-cols-3 h-16 px-2">
-    {/* 1. 투데이 */}
-    <button 
-      onClick={() => setActiveTab('today')}
-      className={`flex flex-col items-center justify-center py-1 transition-colors ${
-        activeTab === 'today' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-      }`}
-    >
-      <span className="text-xl mb-0.5">📅</span>
-      <span className="text-xs">투데이</span>
-    </button>
+        <div className="fixed bottom-0 left-0 w-full z-50 bg-[#121212]/95 backdrop-blur border-t border-white/10 flex justify-center">
+          <nav className="w-full max-w-md grid grid-cols-3 h-16 px-2">
+            {/* 1. 투데이 */}
+            <button 
+              onClick={() => setCurrentTab('today')}
+              className={`flex flex-col items-center justify-center py-1 transition-colors ${
+                currentTab === 'today' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <span className="text-xl mb-0.5">📅</span>
+              <span className="text-xs">투데이</span>
+            </button>
 
-    {/* 2. 클래스 */}
-    <button 
-      onClick={() => setActiveTab('class')}
-      className={`flex flex-col items-center justify-center py-1 transition-colors ${
-        activeTab === 'class' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-      }`}
-    >
-      <span className="text-xl mb-0.5">🎓</span>
-      <span className="text-xs">클래스</span>
-    </button>
+            {/* 2. 클래스 */}
+            <button 
+              onClick={() => setCurrentTab('class')}
+              className={`flex flex-col items-center justify-center py-1 transition-colors ${
+                currentTab === 'class' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <span className="text-xl mb-0.5">🎓</span>
+              <span className="text-xs">클래스</span>
+            </button>
 
-    {/* 3. 나의 기록 */}
-    <button 
-      onClick={() => setActiveTab('record')}
-      className={`flex flex-col items-center justify-center py-1 transition-colors ${
-        activeTab === 'record' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-      }`}
-    >
-      <span className="text-xl mb-0.5">📊</span>
-      <span className="text-xs">나의 기록</span>
-    </button>
-  </nav>
-</div>
+            {/* 3. 나의 기록 */}
+            <button 
+              onClick={() => setCurrentTab('record')}
+              className={`flex flex-col items-center justify-center py-1 transition-colors ${
+                currentTab === 'record' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
+              }`}
+            >
+              <span className="text-xl mb-0.5">📊</span>
+              <span className="text-xs">나의 기록</span>
+            </button>
+          </nav>
+        </div>
 
       </div>
     </main>
