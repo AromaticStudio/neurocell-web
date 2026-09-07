@@ -212,42 +212,34 @@ export default function Home() {
         </div>
 
         {/* 하단 내비게이션 바 */}
-        <div className="fixed bottom-0 left-0 w-full z-50 bg-[#121212]/95 backdrop-blur border-t border-white/10 flex justify-center">
-          <nav className="w-full max-w-md grid grid-cols-3 h-16 px-2">
-            {/* 1. 투데이 */}
-            <button 
-              onClick={() => setCurrentTab('today')}
-              className={`flex flex-col items-center justify-center py-1 transition-colors ${
-                currentTab === 'today' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              <span className="text-xl mb-0.5">📅</span>
-              <span className="text-xs">투데이</span>
-            </button>
+        <nav className="bottom-nav">
+          <button
+            type="button"
+            onClick={() => setCurrentTab('today')}
+            className={`nav-item ${currentTab === 'today' ? 'active' : ''}`}
+          >
+            <span className="nav-ic">📅</span>
+            <span className="nav-lb">투데이</span>
+          </button>
 
-            {/* 2. 클래스 */}
-            <button 
-              onClick={() => setCurrentTab('class')}
-              className={`flex flex-col items-center justify-center py-1 transition-colors ${
-                currentTab === 'class' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              <span className="text-xl mb-0.5">🎓</span>
-              <span className="text-xs">클래스</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('class')}
+            className={`nav-item ${currentTab === 'class' ? 'active' : ''}`}
+          >
+            <span className="nav-ic">🎓</span>
+            <span className="nav-lb">클래스</span>
+          </button>
 
-            {/* 3. 나의 기록 */}
-            <button 
-              onClick={() => setCurrentTab('record')}
-              className={`flex flex-col items-center justify-center py-1 transition-colors ${
-                currentTab === 'record' ? 'text-amber-400 font-bold' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              <span className="text-xl mb-0.5">📊</span>
-              <span className="text-xs">나의 기록</span>
-            </button>
-          </nav>
-        </div>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('record')}
+            className={`nav-item ${currentTab === 'record' ? 'active' : ''}`}
+          >
+            <span className="nav-ic">📊</span>
+            <span className="nav-lb">나의 기록</span>
+          </button>
+        </nav>
 
       </div>
     </main>
