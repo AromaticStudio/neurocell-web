@@ -212,7 +212,15 @@ export default function Home() {
         </div>
 
         {/* 하단 내비게이션 바 */}
-        <nav className="tabbar">
+        <nav 
+          className="tabbar" 
+          style={{ 
+            left: 0, 
+            right: 0, 
+            width: '100%', 
+            boxSizing: 'border-box' 
+          }}
+        >
           <button
             type="button"
             onClick={() => setCurrentTab('today')}
