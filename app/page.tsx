@@ -508,6 +508,9 @@ export default function Home() {
           >
             <span>💬</span> 카카오 1초 로그인
           </button>
+          <p style={{ fontSize: '11px', color: '#737373', lineHeight: 1.5, marginTop: '14px', maxWidth: '260px' }}>
+            로그인 시 Neuro Cell_Fit의 <span style={{ textDecoration: 'underline' }}>이용약관</span> 및 <span style={{ textDecoration: 'underline' }}>개인정보 수집·이용</span>에 동의하게 됩니다.
+          </p>
         </div>
       </main>
     );
