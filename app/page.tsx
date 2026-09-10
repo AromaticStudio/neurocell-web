@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, UIEvent } from 'react';
 import { supabase } from '../lib/supabase';
 
 const INITIAL_MISSIONS = [
@@ -27,6 +27,12 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
+
+  // 개인정보 약관 동의 및 모달 상태
+  const [isAgreed, setIsAgreed] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   // 강의 데이터 및 사용자 Day
   const [lectures, setLectures] = useState<any[]>([]);
@@ -57,7 +63,6 @@ export default function Home() {
   // 한국 시간(KST) 기준 YYYY-MM-DD 문자열 추출
   const toKSTDateString = (dateInput: Date | string = new Date()) => {
     const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
-    // en-CA 로케일은 YYYY-MM-DD 형식을 보장합니다.
     return new Intl.DateTimeFormat('en-CA', {
       timeZone: 'Asia/Seoul',
       year: 'numeric',
@@ -244,6 +249,7 @@ export default function Home() {
   }, []);
 
   const handleKakaoLogin = () => {
+    if (!isAgreed) return;
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://qjtyqfuqtrlxkpanxdti.supabase.co';
     const redirectUrl = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000';
     window.location.href = `${supabaseUrl}/auth/v1/authorize?provider=kakao&redirect_to=${encodeURIComponent(redirectUrl)}`;
@@ -253,6 +259,15 @@ export default function Home() {
     await supabase.auth.signOut();
     setUser(null);
     setProfile(null);
+  };
+
+  // 약관 팝업 내부 스크롤 감지
+  const handleScrollTerms = (e: UIEvent<HTMLDivElement>) => {
+    const target = e.currentTarget;
+    const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 8;
+    if (isBottom) {
+      setHasScrolledToBottom(true);
+    }
   };
 
   const handleSaveNickname = async (e: React.FormEvent) => {
@@ -344,7 +359,6 @@ export default function Home() {
     const updated = missions.map(m => (m.id === id ? { ...m, done: nextDone } : m));
     setMissions(updated);
 
-    // 전체 미션 로그 상태에도 즉시 반영
     setAllMissionLogs(prev => {
       const filtered = prev.filter(l => !(l.log_date === todayStr && l.mission_id === id));
       return [...filtered, { user_id: user.id, log_date: todayStr, mission_id: id, completed: nextDone }];
@@ -406,7 +420,7 @@ export default function Home() {
     return url;
   };
 
-  // 누적 완주 일수 계산 (10개 올클리어한 날짜의 총 개수)
+  // 누적 완주 일수 계산
   const completedDaysCount = useMemo(() => {
     const dateCountMap: { [date: string]: number } = {};
     const todayStr = getTodayString();
@@ -428,7 +442,7 @@ export default function Home() {
     return count;
   }, [allMissionLogs, missions]);
 
-  // Day별 미션 달성 히스토리 데이터 생성 (Day 1 ~ userDay)
+  // Day별 미션 달성 히스토리 데이터
   const missionHistoryList = useMemo(() => {
     const list: any[] = [];
     const maxDay = Math.max(1, Math.min(30, userDay));
@@ -491,27 +505,214 @@ export default function Home() {
     );
   }
 
-  // 1. 비로그인
+  // 1. 비로그인 화면 (약관 동의 및 카카오 로그인)
   if (!user) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
         <div style={{ width: '100%', maxWidth: '390px', backgroundColor: '#121212', borderRadius: '28px', border: '1px solid #262626', padding: '48px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <div style={{ fontSize: '44px', marginBottom: '16px' }}>⚡</div>
           <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#ffffff', marginBottom: '8px' }}>Neuro Cell_Fit</h1>
-          <p style={{ fontSize: '13px', color: '#a3a3a3', lineHeight: 1.6, marginBottom: '36px' }}>
+          <p style={{ fontSize: '13px', color: '#a3a3a3', lineHeight: 1.6, marginBottom: '32px' }}>
             의지력이 아닌 뇌를 깨우는 1% 루틴<br />챌린지에 오신 것을 환영합니다.
           </p>
+
+          {/* [필수] 개인정보 수집 및 이용 동의 체크 라인 (클릭 시 팝업 오픈) */}
+          <div 
+            onClick={() => {
+              if (!isAgreed) {
+                setHasScrolledToBottom(false);
+                setIsModalOpen(true);
+              } else {
+                setIsAgreed(false);
+                setHasScrolledToBottom(false);
+              }
+            }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              marginBottom: '16px',
+              cursor: 'pointer',
+              userSelect: 'none',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              backgroundColor: isAgreed ? 'rgba(254, 229, 0, 0.08)' : 'transparent',
+              transition: 'all 0.2s ease'
+            }}
+          >
+            <input 
+              type="checkbox" 
+              checked={isAgreed} 
+              readOnly 
+              style={{ width: '17px', height: '17px', accentColor: '#FEE500', cursor: 'pointer' }} 
+            />
+            <span style={{ fontSize: '12px', fontWeight: 600, color: isAgreed ? '#FEE500' : '#d4d4d4' }}>
+              [필수] 개인정보 수집 및 이용 동의
+            </span>
+            <span style={{ fontSize: '11px', color: '#888', textDecoration: 'underline' }}>
+              (보기)
+            </span>
+          </div>
+
+          {/* 카카오 1초 로그인 버튼 (동의 시에만 활성화) */}
           <button
             type="button"
             onClick={handleKakaoLogin}
-            style={{ width: '100%', maxWidth: '280px', padding: '14px 20px', backgroundColor: '#FEE500', color: '#191919', fontWeight: 700, fontSize: '14px', borderRadius: '12px', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}
+            disabled={!isAgreed}
+            style={{
+              width: '100%',
+              maxWidth: '280px',
+              padding: '14px 20px',
+              backgroundColor: isAgreed ? '#FEE500' : '#2a2a2a',
+              color: isAgreed ? '#191919' : '#666666',
+              fontWeight: 700,
+              fontSize: '14px',
+              borderRadius: '12px',
+              border: 'none',
+              cursor: isAgreed ? 'pointer' : 'not-allowed',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              transition: 'all 0.2s ease'
+            }}
           >
             <span>💬</span> 카카오 1초 로그인
           </button>
-          <p style={{ fontSize: '11px', color: '#737373', lineHeight: 1.5, marginTop: '14px', maxWidth: '260px' }}>
-            로그인 시 Neuro Cell_Fit의 <span style={{ textDecoration: 'underline' }}>이용약관</span> 및 <span style={{ textDecoration: 'underline' }}>개인정보 수집·이용</span>에 동의하게 됩니다.
-          </p>
         </div>
+
+        {/* 약관 전문 모달 팝업 */}
+        {isModalOpen && (
+          <div style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.8)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            zIndex: 9999
+          }}>
+            <div style={{
+              width: '100%',
+              maxWidth: '360px',
+              backgroundColor: '#1a1a1a',
+              borderRadius: '20px',
+              border: '1px solid #333333',
+              padding: '22px',
+              display: 'flex',
+              flexDirection: 'column',
+              boxShadow: '0 12px 30px rgba(0,0,0,0.7)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ fontSize: '15px', fontWeight: 700, color: '#ffffff', margin: 0 }}>
+                  개인정보 수집 및 이용 동의 (전문)
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  style={{ background: 'none', border: 'none', color: '#888', fontSize: '16px', cursor: 'pointer' }}
+                >
+                  ✕
+                </button>
+              </div>
+
+              {/* 스크롤 감지 영역 */}
+              <div 
+                ref={scrollRef}
+                onScroll={handleScrollTerms}
+                style={{
+                  maxHeight: '230px',
+                  overflowY: 'auto',
+                  fontSize: '12px',
+                  color: '#b0b0b0',
+                  lineHeight: 1.6,
+                  textAlign: 'left',
+                  backgroundColor: '#121212',
+                  padding: '14px',
+                  borderRadius: '10px',
+                  border: '1px solid #282828',
+                  marginBottom: '16px'
+                }}
+              >
+                <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제1조 (수집하는 개인정보 항목)</p>
+                <p style={{ marginBottom: '12px' }}>
+                  1. 카카오 간편 로그인을 통해 제공받는 항목: 카카오 고유 회원 식별자(ID), 닉네임, 프로필 사진 (선택 시 이메일)<br />
+                  2. 서비스 이용 과정에서 생성되는 항목: 챌린지 수행 일자, 루틴 체크 기록, 서비스 접속 일시
+                </p>
+
+                <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제2조 (개인정보의 수집 및 이용 목적)</p>
+                <p style={{ marginBottom: '12px' }}>
+                  1. 카카오 소셜 로그인을 통한 본인 식별 및 회원 관리<br />
+                  2. Neuro Cell_Fit 챌린지 일차별 루틴 진행 상황 기록 및 진도 관리<br />
+                  3. 부정 이용 방지, 서비스 운영 안내 및 참가자 지원
+                </p>
+
+                <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제3조 (개인정보의 보유 및 이용 기간)</p>
+                <p style={{ marginBottom: '12px' }}>
+                  1. 본 서비스의 챌린지 이용 권한은 승인일로부터 30일간 유지되며, 30일 경과 시 챌린지 이용 승인은 자동으로 종료(해제)됩니다.<br />
+                  2. 이용 승인이 종료된 이후에도 회원의 재참여 지원 및 과거 루틴 이력 조회를 위해, 수집된 정보는 회원 탈퇴 요청 시까지 안전하게 보관됩니다.<br />
+                  3. 정보주체가 회원 탈퇴를 요청하거나 서비스가 최종 종료되는 경우, 수집된 모든 개인정보 및 활동 기록은 지체 없이 영구 파기합니다.<br />
+                  4. 단, 관계 법령에 따라 보존 의무가 있는 경우 해당 법령이 정한 기간 동안 안전하게 분리 보관합니다.
+                </p>
+
+                <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제4조 (동의 거부 권리 및 불이익 안내)</p>
+                <p>
+                  1. 정보주체는 본 개인정보 수집 및 이용 동의를 거부할 권리가 있습니다.<br />
+                  2. 단, 수집 항목은 카카오 계정 기반 회원 식별 및 30일 루틴 챌린지 기록 저장을 위한 필수 최소 항목이므로, 동의를 거부하실 경우 카카오 로그인 및 서비스 이용이 불가능합니다.
+                </p>
+
+                <div style={{ height: '30px' }} />
+                <p style={{ color: '#3FD6A6', textAlign: 'center', fontSize: '11px', fontWeight: 600 }}>
+                  ▼ 끝까지 내용을 확인하셨습니다 ▼
+                </p>
+              </div>
+
+              {/* 하단 제어 버튼 */}
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    borderRadius: '10px',
+                    backgroundColor: '#262626',
+                    color: '#aaa',
+                    border: 'none',
+                    fontSize: '12px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  닫기
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasScrolledToBottom}
+                  onClick={() => {
+                    setIsAgreed(true); // 자동 체크 처리!
+                    setIsModalOpen(false);
+                  }}
+                  style={{
+                    flex: 2,
+                    padding: '12px',
+                    borderRadius: '10px',
+                    backgroundColor: hasScrolledToBottom ? '#FEE500' : '#2c2c2c',
+                    color: hasScrolledToBottom ? '#191919' : '#555555',
+                    fontWeight: 700,
+                    border: 'none',
+                    fontSize: '12px',
+                    cursor: hasScrolledToBottom ? 'pointer' : 'not-allowed',
+                    transition: 'all 0.2s ease'
+                  }}
+                >
+                  {hasScrolledToBottom ? '확인 및 동의 완료' : '내용을 끝까지 읽어주세요'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </main>
     );
   }
@@ -961,7 +1162,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 일자별 미션 달성 현황 카드 리스트 */}
+              {/* 일차별 미션 달성 현황 카드 리스트 */}
               <div style={{ backgroundColor: '#141414', borderRadius: '16px', padding: '16px', border: '1px solid #222', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
