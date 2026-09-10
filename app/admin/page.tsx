@@ -1,35 +1,310 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { supabase } from '../../lib/supabase';
 
-// 어머님 원본 Day별 교육 콘텐츠 시드 데이터
-const SEED_DAYS = [
-  { day: 1, week: '1주차 · 도입', title: '의지력이 아닌 뇌를 속이는 1%의 기적', video: true },
-  { day: 2, week: '1주차 · 도입', title: '가짜 배고픔과 코르티솔의 속임수', video: false },
-  { day: 3, week: '1주차 · 도입', title: '혈당 스파이크와 지방 저장 스위치', video: false },
-  { day: 4, week: '1주차 · 도입', title: '제2의 뇌, 장내 마이크로바이옴', video: false },
-  { day: 5, week: '1주차 · 도입', title: '잠든 사이 벌어지는 뇌의 기적, 자가포식', video: false },
-  { day: 6, week: '1주차 · 도입', title: '멈춰있는 림프를 뚫어라, 순환과 해독', video: false },
-  { day: 7, week: '1주차 · 도입', title: '신경 가소성, 새로운 정체성의 완성', video: false },
-];
+const ADMIN_PASSWORD = 'coach1234';
 
-// 어머님 원본 참여자 시드 데이터
-const SEED_PARTICIPANTS = [
-  { id: 'u1', name: '은지', startDate: '2026-09-01', currentDay: 7, streak: 7, completion: 88, weight: 54.2, bmi: 21.2, payStatus: 'paid', lastActive: '오늘 접속' },
-  { id: 'u2', name: '민준', startDate: '2026-09-01', currentDay: 5, streak: 4, completion: 65, weight: 72.0, bmi: 23.5, payStatus: 'paid', lastActive: '오늘 접속' },
-  { id: 'u3', name: '서연', startDate: '2026-08-25', currentDay: 14, streak: 12, completion: 92, weight: 58.1, bmi: 22.0, payStatus: 'paid', lastActive: '오늘 접속' },
-  { id: 'u4', name: '지훈', startDate: '2026-09-01', currentDay: 3, streak: 1, completion: 40, weight: 81.5, bmi: 26.1, payStatus: 'expired', lastActive: '3일 전' },
-  { id: 'u5', name: '수아', startDate: '2026-09-02', currentDay: 6, streak: 6, completion: 80, weight: 49.8, bmi: 19.5, payStatus: 'paid', lastActive: '오늘 접속' },
-];
+// 한국 시간(KST) 기준 YYYY-MM-DD 문자열 추출 함수
+const toKSTDateString = (dateInput: Date | string = new Date()) => {
+  const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+};
+
+// 한국 날짜 기준 Day 계산
+const calculateAdminUserDay = (approvedAt: string | null) => {
+  if (!approvedAt) return 1;
+
+  const todayYMD = toKSTDateString(new Date());
+  const approvedYMD = toKSTDateString(approvedAt);
+
+  const [tY, tM, tD] = todayYMD.split('-').map(Number);
+  const [aY, aM, aD] = approvedYMD.split('-').map(Number);
+
+  const utcToday = Date.UTC(tY, tM - 1, tD);
+  const utcApproved = Date.UTC(aY, aM - 1, aD);
+
+  const diffDays = Math.floor((utcToday - utcApproved) / (1000 * 60 * 60 * 24));
+  return Math.max(1, diffDays + 1);
+};
 
 export default function AdminPage() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [inputPw, setInputPw] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants'>('dashboard');
-  const [participants, setParticipants] = useState(SEED_PARTICIPANTS);
-  const [dayList, setDayList] = useState(SEED_DAYS);
-  const [selectedUser, setSelectedUser] = useState<typeof SEED_PARTICIPANTS[0] | null>(null);
+  const [participants, setParticipants] = useState<any[]>([]);
+  const [dayList, setDayList] = useState<any[]>([]);
+  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  // 강의 수정 모달 상태
+  const [editingLecture, setEditingLecture] = useState<any>(null);
+  const [isSavingLecture, setIsSavingLecture] = useState(false);
+
+  // 강의 목록 불러오기
+  const fetchLectures = async () => {
+    const { data } = await supabase.from('lectures').select('*').order('day', { ascending: true });
+    if (data) setDayList(data);
+  };
+
+  // 회원 목록 불러오기 (미션 완료 일수 실시간 집계 연동)
+  const fetchParticipants = async () => {
+    setLoading(true);
+    try {
+      const [{ data: profilesData, error: pError }, { data: missionLogsData }] = await Promise.all([
+        supabase.from('profiles').select('*').order('created_at', { ascending: false }),
+        supabase.from('mission_logs').select('user_id, log_date, completed').eq('completed', true),
+      ]);
+
+      if (!pError && profilesData) {
+        // 회원별 완주(10개 올클리어한 날) 일수 집계
+        const userCompleteDaysMap: { [userId: string]: number } = {};
+        if (missionLogsData) {
+          const userDateCounts: { [userId: string]: { [date: string]: number } } = {};
+          missionLogsData.forEach(log => {
+            if (!userDateCounts[log.user_id]) userDateCounts[log.user_id] = {};
+            userDateCounts[log.user_id][log.log_date] = (userDateCounts[log.user_id][log.log_date] || 0) + 1;
+          });
+
+          Object.keys(userDateCounts).forEach(uid => {
+            const count = Object.values(userDateCounts[uid]).filter(cnt => cnt >= 10).length;
+            userCompleteDaysMap[uid] = count;
+          });
+        }
+
+        const mapped = profilesData.map((p, idx) => {
+          const currentDay = calculateAdminUserDay(p.approved_at);
+          const realCompletedDays = userCompleteDaysMap[p.id] || 0;
+
+          return {
+            id: p.id,
+            name: p.nickname || `참여자 ${idx + 1}`,
+            startDate: p.approved_at ? toKSTDateString(p.approved_at) : (p.created_at ? toKSTDateString(p.created_at) : '-'),
+            currentDay,
+            streak: realCompletedDays, // 🌟 DB의 3이 아닌 실제 완주 일수 반영!
+            status: p.status || 'pending',
+            rawApprovedAt: p.approved_at,
+          };
+        });
+        setParticipants(mapped);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchParticipants();
+      fetchLectures();
+    }
+  }, [isAuthenticated]);
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inputPw === ADMIN_PASSWORD) {
+      setIsAuthenticated(true);
+    } else {
+      alert('비밀번호가 일치하지 않습니다.');
+    }
+  };
+
+  // 승인/취소 토글 (취소 시 approved_at을 null로 깨끗이 초기화, 승인 시 현재 시간 등록)
+  const toggleApproval = async (user: any) => {
+    const nextStatus = user.status === 'approved' ? 'pending' : 'approved';
+    const updateData: any = {
+      status: nextStatus,
+      approved_at: nextStatus === 'approved' ? new Date().toISOString() : null,
+    };
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update(updateData)
+        .eq('id', user.id);
+
+      if (error) {
+        alert(`상태 변경 실패: ${error.message}`);
+      } else {
+        await fetchParticipants();
+        alert(nextStatus === 'approved' ? `${user.name}님이 승인되었습니다 (Day 1 시작).` : `${user.name}님의 승인이 취소되었습니다.`);
+        if (selectedUser?.id === user.id) {
+          setSelectedUser(null);
+        }
+      }
+    } catch (err: any) {
+      alert(`오류: ${err.message}`);
+    }
+  };
+
+  // 대기자 전체 일괄 승인
+  const handleApproveAll = async () => {
+    const pendingUsers = participants.filter(p => p.status !== 'approved');
+    if (pendingUsers.length === 0) {
+      alert('승인할 대기자가 없습니다.');
+      return;
+    }
+
+    if (!confirm(`현재 입금 대기 중인 ${pendingUsers.length}명을 모두 승인하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      const pendingIds = pendingUsers.map(p => p.id);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ status: 'approved', approved_at: new Date().toISOString() })
+        .in('id', pendingIds);
+
+      if (error) {
+        alert(`일괄 승인 실패: ${error.message}`);
+      } else {
+        await fetchParticipants();
+        alert(`${pendingUsers.length}명이 모두 승인되었습니다.`);
+      }
+    } catch (err: any) {
+      alert(`오류: ${err.message}`);
+    }
+  };
+
+  // 기수 종료: 전체 일괄 취소
+  const handleResetAll = async () => {
+    const approvedUsers = participants.filter(p => p.status === 'approved');
+    if (approvedUsers.length === 0) {
+      alert('승인 취소할 회원이 없습니다.');
+      return;
+    }
+
+    if (!confirm(`[기수 종료] 승인된 회원 ${approvedUsers.length}명을 모두 비승인 상태로 초기화하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      const approvedIds = approvedUsers.map(p => p.id);
+      const { error } = await supabase
+        .from('profiles')
+        .update({ status: 'pending', approved_at: null })
+        .in('id', approvedIds);
+
+      if (error) {
+        alert(`일괄 취소 실패: ${error.message}`);
+      } else {
+        await fetchParticipants();
+        alert('모든 회원이 초기화되었습니다.');
+      }
+    } catch (err: any) {
+      alert(`오류: ${err.message}`);
+    }
+  };
+
+  // 강의 내용 저장
+  const handleSaveLecture = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLecture) return;
+    setIsSavingLecture(true);
+
+    try {
+      const { error } = await supabase
+        .from('lectures')
+        .upsert({
+          day: editingLecture.day,
+          week: editingLecture.week,
+          title: editingLecture.title,
+          video_url: editingLecture.video_url,
+          description: editingLecture.description,
+        });
+
+      if (error) {
+        alert(`저장 실패: ${error.message}`);
+      } else {
+        alert(`Day ${editingLecture.day} 강의가 저장되었습니다.`);
+        setEditingLecture(null);
+        fetchLectures();
+      }
+    } catch (err: any) {
+      alert(`오류: ${err.message}`);
+    } finally {
+      setIsSavingLecture(false);
+    }
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <main style={{ minHeight: '100vh', backgroundColor: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <form onSubmit={handleLogin} style={{ width: '100%', maxWidth: '340px', backgroundColor: '#161616', padding: '36px 24px', borderRadius: '16px', border: '1px solid #2a2a2a', textAlign: 'center' }}>
+          <div style={{ fontSize: '36px', marginBottom: '12px' }}>🔒</div>
+          <h1 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '8px' }}>Neuro Cell_Fit 관리자</h1>
+          <p style={{ fontSize: '12px', color: '#888', marginBottom: '24px' }}>코치 전용 비밀번호를 입력하세요.</p>
+          <input
+            type="password"
+            placeholder="비밀번호를 입력해주세요."
+            value={inputPw}
+            onChange={e => setInputPw(e.target.value)}
+            style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #333', backgroundColor: '#222', color: '#fff', marginBottom: '16px', boxSizing: 'border-box' }}
+          />
+          <button type="submit" style={{ width: '100%', padding: '12px', borderRadius: '8px', backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700, border: 'none', cursor: 'pointer' }}>
+            대시보드 접속
+          </button>
+        </form>
+      </main>
+    );
+  }
+
+  const approvedCount = participants.filter(p => p.status === 'approved').length;
+  const pendingCount = participants.filter(p => p.status !== 'approved').length;
 
   return (
     <div className="admin-shell">
+      {/* 강의 수정 모달 */}
+      {editingLecture && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <form onSubmit={handleSaveLecture} style={{ width: '100%', maxWidth: '440px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box' }}>
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: '#fff' }}>
+              Day {editingLecture.day} 강의 설정
+            </h3>
+            
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>강의 제목</label>
+            <input
+              type="text"
+              value={editingLecture.title || ''}
+              onChange={e => setEditingLecture({ ...editingLecture, title: e.target.value })}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '12px', boxSizing: 'border-box' }}
+            />
+
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>유튜브 영상 주소 (URL)</label>
+            <input
+              type="text"
+              placeholder="예: https://www.youtube.com/watch?v=..."
+              value={editingLecture.video_url || ''}
+              onChange={e => setEditingLecture({ ...editingLecture, video_url: e.target.value })}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '12px', boxSizing: 'border-box' }}
+            />
+
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>핵심 요약 / 가이드 문구</label>
+            <textarea
+              rows={3}
+              value={editingLecture.description || ''}
+              onChange={e => setEditingLecture({ ...editingLecture, description: e.target.value })}
+              style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '16px', boxSizing: 'border-box' }}
+            />
+
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button type="button" onClick={() => setEditingLecture(null)} style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#262626', color: '#aaa', cursor: 'pointer' }}>취소</button>
+              <button type="submit" disabled={isSavingLecture} style={{ flex: 1.5, padding: '12px', borderRadius: '8px', border: 'none', backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700, cursor: 'pointer' }}>
+                {isSavingLecture ? '저장 중...' : '저장 완료'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* 사이드바 */}
       <aside className="admin-sidebar">
         <div className="brand-box">
@@ -38,22 +313,13 @@ export default function AdminPage() {
         </div>
 
         <nav className="nav-list">
-          <button
-            className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`}
-            onClick={() => setActiveTab('dashboard')}
-          >
+          <button className={`nav-btn ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
             <span className="ic">📊</span>대시보드
           </button>
-          <button
-            className={`nav-btn ${activeTab === 'content' ? 'active' : ''}`}
-            onClick={() => setActiveTab('content')}
-          >
+          <button className={`nav-btn ${activeTab === 'content' ? 'active' : ''}`} onClick={() => setActiveTab('content')}>
             <span className="ic">🎬</span>콘텐츠 관리
           </button>
-          <button
-            className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`}
-            onClick={() => setActiveTab('participants')}
-          >
+          <button className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`} onClick={() => setActiveTab('participants')}>
             <span className="ic">👥</span>참여자 관리
           </button>
         </nav>
@@ -69,89 +335,77 @@ export default function AdminPage() {
         </div>
       </aside>
 
-      {/* 본문 대시보드 */}
+      {/* 본문 */}
       <main className="admin-main">
         {activeTab === 'dashboard' && (
           <section>
-            <div className="admin-head">
-              <h1>대시보드</h1>
-              <div className="sub">전체 참여자 현황을 한눈에 확인하세요 · 2026년 9월 기준</div>
+            <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+              <div>
+                <h1>대시보드</h1>
+                <div className="sub">개인별 30일 루틴 진행 현황 · {toKSTDateString()} 기준</div>
+              </div>
+              <button onClick={fetchParticipants} className="btn-table">🔄 새로고침</button>
             </div>
 
-            {/* KPI 카드 행 */}
             <div className="kpi-grid">
               <div className="kpi-card">
-                <div className="lab">총 참여자</div>
+                <div className="lab">총 신청 회원</div>
                 <div className="val">{participants.length}명</div>
-                <div className="delta up">+2 이번 주</div>
+                <div className="delta up">승인: {approvedCount}명</div>
               </div>
               <div className="kpi-card">
-                <div className="lab">오늘 활성 사용자</div>
-                <div className="val">4명</div>
-                <div className="delta up">전일 대비 +8%</div>
+                <div className="lab">입금 대기 (승인요망)</div>
+                <div className="val" style={{ color: pendingCount > 0 ? '#D9B24C' : 'inherit' }}>{pendingCount}명</div>
+                <div className="delta down">{pendingCount > 0 ? '확인 필요' : '대기 없음'}</div>
               </div>
               <div className="kpi-card">
-                <div className="lab">평균 미션 달성률</div>
-                <div className="val">73%</div>
-                <div className="delta down">-2%p</div>
-              </div>
-              <div className="kpi-card">
-                <div className="lab">평균 연속 스트릭</div>
-                <div className="val">6.0일</div>
-                <div className="delta up">+1.2일</div>
-              </div>
-              <div className="kpi-card">
-                <div className="lab">유료 구독 유지율</div>
-                <div className="val">80%</div>
-                <div className="delta up">+5%p</div>
+                <div className="lab">진행 중인 참여자</div>
+                <div className="val">{approvedCount}명</div>
+                <div className="delta up">개인 진도 진행 중</div>
               </div>
             </div>
 
-            {/* 위험 신호 박스 & 최근 활동 */}
             <div className="two-col" style={{ marginTop: '20px' }}>
               <div className="panel-box">
-                <h3>⚠️ 주의가 필요한 참여자</h3>
-                <div className="alert-item">
-                  <div>
-                    <div style={{ fontWeight: 'bold' }}>지훈</div>
-                    <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                      3일째 미접속 · Day 3에서 멈춤
+                <h3>⚠️ 입금 승인 대기 명단</h3>
+                {pendingCount === 0 ? (
+                  <div style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '8px' }}>대기 중인 회원이 없습니다.</div>
+                ) : (
+                  participants.filter(p => p.status !== 'approved').map(p => (
+                    <div key={p.id} className="alert-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                      <div>
+                        <div style={{ fontWeight: 'bold' }}>{p.name}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-mid)' }}>신청일: {p.startDate}</div>
+                      </div>
+                      <button className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000' }} onClick={() => toggleApproval(p)}>
+                        승인하기
+                      </button>
                     </div>
-                  </div>
-                  <span className="pill-warn">관리 요망</span>
-                </div>
+                  ))
+                )}
               </div>
 
               <div className="panel-box">
                 <h3>최근 인증 활동</h3>
                 <div className="feed-item">
                   <div className="dot"></div>
-                  <div style={{ fontSize: '12.5px' }}>
-                    <strong>은지</strong>님이 Day 7 루틴을 올클리어했어요
-                  </div>
-                  <span className="time-lbl">방금 전</span>
-                </div>
-                <div className="feed-item">
-                  <div className="dot"></div>
-                  <div style={{ fontSize: '12.5px' }}>
-                    <strong>수아</strong>님이 아침 기상 인증을 완료했어요
-                  </div>
-                  <span className="time-lbl">1시간 전</span>
+                  <div style={{ fontSize: '12.5px' }}><strong>회원 시스템</strong>이 정상 가동 중입니다.</div>
+                  <span className="time-lbl">실시간</span>
                 </div>
               </div>
             </div>
           </section>
         )}
 
-        {/* 콘텐츠 관리 탭 */}
+        {/* 콘텐츠 관리 */}
         {activeTab === 'content' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">Day별 교육 자료를 등록·수정합니다. 저장하면 참여자 웹에 즉시 반영됩니다.</div>
+                <div className="sub">Day별 유튜브 영상과 강의 자료를 등록·수정합니다. (참여자 Day에 맞춰 누적 오픈됩니다)</div>
               </div>
-              <button className="btn-primary" onClick={() => alert('새 Day 추가 팝업 기능 준비 중')}>+ 새 Day 추가</button>
+              <button onClick={fetchLectures} className="btn-table">🔄 새로고침</button>
             </div>
 
             <div className="table-wrap">
@@ -159,10 +413,10 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th style={{ width: '80px' }}>Day</th>
-                    <th style={{ width: '140px' }}>주차</th>
-                    <th>제목</th>
+                    <th style={{ width: '130px' }}>주차</th>
+                    <th>강의 제목</th>
                     <th style={{ width: '120px' }}>영상 상태</th>
-                    <th style={{ width: '120px' }}>관리</th>
+                    <th style={{ width: '100px', textAlign: 'center' }}>관리</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -172,12 +426,12 @@ export default function AdminPage() {
                       <td style={{ color: 'var(--text-mid)' }}>{d.week}</td>
                       <td>{d.title}</td>
                       <td>
-                        <span className={`status-pill ${d.video ? 'ok' : 'pending'}`}>
-                          {d.video ? '영상 완료' : '영상 준비중'}
+                        <span className={`status-pill ${d.video_url ? 'ok' : 'pending'}`}>
+                          {d.video_url ? '영상 등록됨' : '영상 미등록'}
                         </span>
                       </td>
-                      <td>
-                        <button className="btn-table" onClick={() => alert(`Day ${d.day} 편집`)}>수정</button>
+                      <td style={{ textAlign: 'center' }}>
+                        <button className="btn-table" onClick={() => setEditingLecture(d)}>수정</button>
                       </td>
                     </tr>
                   ))}
@@ -187,54 +441,75 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 참여자 관리 탭 */}
+        {/* 참여자 관리 */}
         {activeTab === 'participants' && (
           <section>
-            <div className="admin-head">
-              <h1>참여자 관리</h1>
-              <div className="sub">참여자별 진행 상황, 체중 기록, 결제 상태를 확인합니다.</div>
+            <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <h1>참여자 관리</h1>
+                <div className="sub">개인별 시작일 기준 현재 진행 Day와 만료(30일)를 관리합니다.</div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={handleApproveAll} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
+                  ✓ 대기자 전체 일괄 승인
+                </button>
+                <button onClick={handleResetAll} className="btn-table" style={{ backgroundColor: '#ff4d4d', color: '#fff', fontWeight: 600 }}>
+                  🚫 전체 일괄 초기화
+                </button>
+                <button onClick={fetchParticipants} className="btn-table">🔄 새로고침</button>
+              </div>
             </div>
 
             <div className="table-wrap">
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th>이름</th>
-                    <th>시작일</th>
-                    <th>현재 Day</th>
-                    <th>스트릭</th>
-                    <th>달성률</th>
-                    <th>체중 / BMI</th>
-                    <th>결제 상태</th>
-                    <th>접속 상태</th>
+                    <th>이름 (닉네임)</th>
+                    <th>시작(승인)일</th>
+                    <th>현재 진행</th>
+                    <th>완주 달성일</th>
+                    <th>상태</th>
+                    <th>승인 관리</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {participants.map(p => (
-                    <tr key={p.id} onClick={() => setSelectedUser(p)} style={{ cursor: 'pointer' }}>
-                      <td>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div className="avatar-circle">{p.name[0]}</div>
-                          <strong>{p.name}</strong>
-                        </div>
-                      </td>
-                      <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
-                      <td><strong>Day {p.currentDay}</strong></td>
-                      <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
-                      <td>{p.completion}%</td>
-                      <td>{p.weight}kg · {p.bmi}</td>
-                      <td>
-                        <span className={`status-pill ${p.payStatus === 'paid' ? 'ok' : 'warn'}`}>
-                          {p.payStatus === 'paid' ? '결제완료' : '만료/미결제'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`status-pill ${p.lastActive === '오늘 접속' ? 'ok' : 'warn'}`}>
-                          {p.lastActive}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                  {loading ? (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
+                  ) : participants.length === 0 ? (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
+                  ) : (
+                    participants.map(p => (
+                      <tr key={p.id} onClick={() => setSelectedUser(p)} style={{ cursor: 'pointer' }}>
+                        <td>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <div className="avatar-circle">{p.name[0]}</div>
+                            <strong>{p.name}</strong>
+                          </div>
+                        </td>
+                        <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
+                        <td><strong>Day {p.currentDay} / 30</strong></td>
+                        <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
+                        <td>
+                          <span className={`status-pill ${p.status === 'approved' ? 'ok' : 'warn'}`}>
+                            {p.status === 'approved' ? (p.currentDay > 30 ? '30일만료' : '진행중') : '입금대기'}
+                          </span>
+                        </td>
+                        <td onClick={e => e.stopPropagation()}>
+                          <button
+                            className="btn-table"
+                            style={{
+                              backgroundColor: p.status === 'approved' ? '#262626' : '#3FD6A6',
+                              color: p.status === 'approved' ? '#888' : '#000',
+                              fontWeight: 600,
+                            }}
+                            onClick={() => toggleApproval(p)}
+                          >
+                            {p.status === 'approved' ? '승인 취소' : '✓ 승인하기'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -242,7 +517,7 @@ export default function AdminPage() {
         )}
       </main>
 
-      {/* 우측 회원 상세 슬라이드 패널 */}
+      {/* 우측 회원 상세 패널 */}
       {selectedUser && (
         <div className="side-drawer">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -255,39 +530,22 @@ export default function AdminPage() {
             <div>
               <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedUser.name}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                {selectedUser.startDate} 시작 · Day {selectedUser.currentDay} 진행 중
+                {selectedUser.startDate} 승인 · <strong>Day {selectedUser.currentDay} 진행 중</strong>
               </div>
             </div>
           </div>
 
-          <div className="drawer-stats">
-            <div className="stat-box">
-              <div className="v">🔥 {selectedUser.streak}일</div>
-              <div className="l">STREAK</div>
-            </div>
-            <div className="stat-box">
-              <div className="v">{selectedUser.completion}%</div>
-              <div className="l">달성률</div>
-            </div>
-            <div className="stat-box">
-              <div className="v">{selectedUser.weight}kg</div>
-              <div className="l">체중 (BMI {selectedUser.bmi})</div>
-            </div>
-          </div>
-
-          <div className="panel-box" style={{ marginTop: '18px' }}>
-            <h3 style={{ fontSize: '12.5px', marginBottom: '8px' }}>코치 전용 메모 (회원 비공개)</h3>
-            <textarea
-              className="coach-textarea"
-              placeholder="예: 수분 섭취 루틴에 어려움이 있어 카톡으로 격려 필요."
-              defaultValue=""
-            />
+          <div style={{ marginTop: '20px' }}>
             <button
               className="btn-primary"
-              style={{ width: '100%', marginTop: '8px' }}
-              onClick={() => alert('메모가 저장되었습니다')}
+              style={{
+                width: '100%',
+                backgroundColor: selectedUser.status === 'approved' ? '#333' : '#3FD6A6',
+                color: selectedUser.status === 'approved' ? '#fff' : '#000',
+              }}
+              onClick={() => toggleApproval(selectedUser)}
             >
-              메모 저장
+              {selectedUser.status === 'approved' ? '승인 취소 (비승인 전환)' : '✓ 승인하기 (Day 1 시작)'}
             </button>
           </div>
         </div>

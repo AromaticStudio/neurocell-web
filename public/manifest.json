@@ -1,0 +1,23 @@
+{
+  "name": "Neuro Cell_Fit",
+  "short_name": "Cell_Fit",
+  "description": "의지력이 아닌 뇌를 깨우는 1% 루틴 챌린지",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/icon.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
