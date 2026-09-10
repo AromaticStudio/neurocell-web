@@ -86,9 +86,11 @@ export default function AdminPage() {
             name: p.nickname || `참여자 ${idx + 1}`,
             startDate: p.approved_at ? toKSTDateString(p.approved_at) : (p.created_at ? toKSTDateString(p.created_at) : '-'),
             currentDay,
-            streak: realCompletedDays, // 🌟 DB의 3이 아닌 실제 완주 일수 반영!
+            streak: realCompletedDays,
             status: p.status || 'pending',
             rawApprovedAt: p.approved_at,
+            height: p.height,
+            target_weight: p.target_weight,
           };
         });
         setParticipants(mapped);
@@ -116,31 +118,89 @@ export default function AdminPage() {
     }
   };
 
-  // 승인/취소 토글 (취소 시 approved_at을 null로 깨끗이 초기화, 승인 시 현재 시간 등록)
+  // 1. 승인 / 승인 취소 (취소 시 mission_logs만 자동 초기화, 신체/체중 데이터는 보존)
   const toggleApproval = async (user: any) => {
-    const nextStatus = user.status === 'approved' ? 'pending' : 'approved';
+    const isCancelling = user.status === 'approved';
+
+    if (isCancelling) {
+      const ok = confirm(
+        `[승인 취소 / 기수 종료]\n\n` +
+        `'${user.name}' 회원의 승인을 취소하시겠습니까?\n` +
+        `• 30일 루틴 체크(미션 로그)는 다음 기수를 위해 초기화됩니다.\n` +
+        `• 키, 목표체중, 체중 변화 기록은 안전하게 유지됩니다.`
+      );
+      if (!ok) return;
+    }
+
+    const nextStatus = isCancelling ? 'pending' : 'approved';
     const updateData: any = {
       status: nextStatus,
       approved_at: nextStatus === 'approved' ? new Date().toISOString() : null,
     };
 
     try {
-      const { error } = await supabase
+      // 1) 프로필 상태 업데이트
+      const { error: pError } = await supabase
         .from('profiles')
         .update(updateData)
         .eq('id', user.id);
 
-      if (error) {
-        alert(`상태 변경 실패: ${error.message}`);
-      } else {
-        await fetchParticipants();
-        alert(nextStatus === 'approved' ? `${user.name}님이 승인되었습니다 (Day 1 시작).` : `${user.name}님의 승인이 취소되었습니다.`);
-        if (selectedUser?.id === user.id) {
-          setSelectedUser(null);
-        }
+      if (pError) throw pError;
+
+      // 2) 승인 취소인 경우 미션 로그만 삭제 (체중 기록 weight_records는 그대로 유지!)
+      if (isCancelling) {
+        await supabase
+          .from('mission_logs')
+          .delete()
+          .eq('user_id', user.id);
+      }
+
+      await fetchParticipants();
+      alert(
+        nextStatus === 'approved'
+          ? `${user.name}님이 승인되었습니다. (Day 1 시작)`
+          : `${user.name}님의 승인이 취소되고 이전 미션 로그가 깔끔하게 초기화되었습니다.`
+      );
+
+      if (selectedUser?.id === user.id) {
+        setSelectedUser(null);
       }
     } catch (err: any) {
-      alert(`오류: ${err.message}`);
+      alert(`처리 실패: ${err.message}`);
+    }
+  };
+
+  // 2. 완전 탈퇴 처리 (영구 삭제: mission_logs, weight_records, profiles 전부 파기)
+  const handleDeleteUserCompletely = async (user: any) => {
+    const check1 = confirm(
+      `⚠️ [회원 영구 탈퇴 및 데이터 완전 파기]\n\n` +
+      `'${user.name}' 회원의 모든 데이터를 DB에서 영구 삭제하시겠습니까?\n` +
+      `• 프로필, 미션 로그, 체중 변화 기록 일체가 영구 파기됩니다.\n` +
+      `• 삭제 후에는 복구할 수 없습니다.`
+    );
+    if (!check1) return;
+
+    const check2 = prompt(`확인을 위해 회원의 이름('${user.name}')을 정확히 입력해 주세요.`);
+    if (check2 !== user.name) {
+      alert('회원 이름이 일치하지 않아 취소되었습니다.');
+      return;
+    }
+
+    try {
+      // 1) 미션 로그 삭제
+      await supabase.from('mission_logs').delete().eq('user_id', user.id);
+      // 2) 체중 기록 삭제
+      await supabase.from('weight_records').delete().eq('user_id', user.id);
+      // 3) 프로필 삭제
+      const { error: profError } = await supabase.from('profiles').delete().eq('id', user.id);
+
+      if (profError) throw profError;
+
+      alert(`${user.name} 회원의 모든 데이터가 영구 파기(탈퇴 처리)되었습니다.`);
+      setSelectedUser(null);
+      await fetchParticipants();
+    } catch (err: any) {
+      alert(`탈퇴 처리 실패: ${err.message}`);
     }
   };
 
@@ -174,7 +234,7 @@ export default function AdminPage() {
     }
   };
 
-  // 기수 종료: 전체 일괄 취소
+  // 기수 종료: 전체 일괄 취소 (승인된 회원의 미션 로그 일괄 정리)
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -182,25 +242,33 @@ export default function AdminPage() {
       return;
     }
 
-    if (!confirm(`[기수 종료] 승인된 회원 ${approvedUsers.length}명을 모두 비승인 상태로 초기화하시겠습니까?`)) {
+    if (!confirm(
+      `[기수 일괄 종료]\n\n승인된 회원 ${approvedUsers.length}명을 모두 대기 상태로 되돌리고, 각 회원의 미션 로그를 초기화하시겠습니까?\n(키, 체중 기록은 안전하게 보존됩니다.)`
+    )) {
       return;
     }
 
     try {
       const approvedIds = approvedUsers.map(p => p.id);
+
+      // 프로필 비승인 전환
       const { error } = await supabase
         .from('profiles')
         .update({ status: 'pending', approved_at: null })
         .in('id', approvedIds);
 
-      if (error) {
-        alert(`일괄 취소 실패: ${error.message}`);
-      } else {
-        await fetchParticipants();
-        alert('모든 회원이 초기화되었습니다.');
-      }
+      if (error) throw error;
+
+      // 미션 로그만 일괄 삭제
+      await supabase
+        .from('mission_logs')
+        .delete()
+        .in('user_id', approvedIds);
+
+      await fetchParticipants();
+      alert('모든 회원의 기수가 종료되고 미션 기록이 초기화되었습니다.');
     } catch (err: any) {
-      alert(`오류: ${err.message}`);
+      alert(`일괄 취소 실패: ${err.message}`);
     }
   };
 
@@ -454,7 +522,7 @@ export default function AdminPage() {
                   ✓ 대기자 전체 일괄 승인
                 </button>
                 <button onClick={handleResetAll} className="btn-table" style={{ backgroundColor: '#ff4d4d', color: '#fff', fontWeight: 600 }}>
-                  🚫 전체 일괄 초기화
+                  🚫 전체 일괄 기수종료(초기화)
                 </button>
                 <button onClick={fetchParticipants} className="btn-table">🔄 새로고침</button>
               </div>
@@ -535,6 +603,16 @@ export default function AdminPage() {
             </div>
           </div>
 
+          {/* 신체 정보 요약 표시 */}
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828', fontSize: '12px' }}>
+            <div style={{ color: '#aaa', marginBottom: '4px' }}>신체 설정 정보</div>
+            <div style={{ color: '#fff' }}>
+              키: <strong>{selectedUser.height ? `${selectedUser.height} cm` : '미입력'}</strong> / 
+              목표: <strong>{selectedUser.target_weight ? `${selectedUser.target_weight} kg` : '미입력'}</strong>
+            </div>
+          </div>
+
+          {/* 버튼 1: 단순 승인 토글 (미션 로그만 초기화, 신체 기록 유지) */}
           <div style={{ marginTop: '20px' }}>
             <button
               className="btn-primary"
@@ -545,8 +623,33 @@ export default function AdminPage() {
               }}
               onClick={() => toggleApproval(selectedUser)}
             >
-              {selectedUser.status === 'approved' ? '승인 취소 (비승인 전환)' : '✓ 승인하기 (Day 1 시작)'}
+              {selectedUser.status === 'approved' ? '승인 취소 (미션 로그만 리셋)' : '✓ 승인하기 (Day 1 시작)'}
             </button>
+          </div>
+
+          {/* 버튼 2: 회원 영구 탈퇴 및 데이터 영구 파기 */}
+          <div style={{ marginTop: '12px', borderTop: '1px solid #262626', paddingTop: '16px' }}>
+            <button
+              type="button"
+              onClick={() => handleDeleteUserCompletely(selectedUser)}
+              style={{
+                width: '100%',
+                padding: '10px',
+                borderRadius: '8px',
+                backgroundColor: 'transparent',
+                border: '1px solid #ff4d4d',
+                color: '#ff4d4d',
+                fontSize: '11.5px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.2s',
+              }}
+            >
+              ⚠️ 회원 완전 탈퇴 (전체 데이터 영구 파기)
+            </button>
+            <p style={{ fontSize: '10px', color: '#666', marginTop: '6px', textAlign: 'center', lineHeight: 1.4 }}>
+              탈퇴 요청 시 사용하며, 프로필 및 모든 체중/루틴 기록이 즉시 영구 삭제됩니다.
+            </p>
           </div>
         </div>
       )}
