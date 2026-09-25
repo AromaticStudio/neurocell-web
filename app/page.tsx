@@ -40,8 +40,9 @@ export default function Home() {
   const [selectedLecture, setSelectedLecture] = useState<any>(null);
   const [selectedMotivation, setSelectedMotivation] = useState<any>(null);
 
-  // 코치 노트 (DB 연동)
+  // 코치 설정 (코치 노트, 1:1 오카방 링크)
   const [coachNote, setCoachNote] = useState('가짜 배고픔은 뇌가 만든 착각이에요. 오늘도 나 자신을 믿고 루틴을 지켜봐요 🌤️');
+  const [openChatUrl, setOpenChatUrl] = useState('');
 
   // 닉네임 수정 모달
   const [isEditingName, setIsEditingName] = useState(false);
@@ -180,15 +181,17 @@ export default function Home() {
         if (firstMotivation) setSelectedMotivation(firstMotivation);
       }
 
-      // 2. 코치 노트 불러오기
-      const { data: noteData } = await supabase
+      // 2. 설정(코치 노트 및 1:1 오카방 링크) 불러오기
+      const { data: settingsData } = await supabase
         .from('app_settings')
-        .select('value')
-        .eq('key', 'coach_note')
-        .maybeSingle();
+        .select('key, value')
+        .in('key', ['coach_note', 'open_chat_url']);
 
-      if (noteData?.value && isMounted) {
-        setCoachNote(noteData.value);
+      if (settingsData && isMounted) {
+        settingsData.forEach(item => {
+          if (item.key === 'coach_note') setCoachNote(item.value);
+          if (item.key === 'open_chat_url') setOpenChatUrl(item.value);
+        });
       }
     };
 
@@ -1011,6 +1014,74 @@ export default function Home() {
               <div className="msg-card">
                 <div className="k">COACH'S NOTE · 매일 업데이트</div>
                 <p style={{ whiteSpace: 'pre-wrap' }}>{coachNote}</p>
+              </div>
+
+              {/* 💬 1:1 카톡 질문 패널 (패딩 및 카드 디자인 적용) */}
+              <div style={{
+                marginTop: '16px',
+                marginBottom: '10px',
+                backgroundColor: '#161616',
+                borderRadius: '16px',
+                padding: '18px 16px',
+                border: '1px solid #282828',
+                textAlign: 'center',
+                boxSizing: 'border-box'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '16px' }}>💬</span>
+                  <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#fff' }}>코치 1:1 맞춤 상담 & 질문</span>
+                </div>
+                <p style={{ fontSize: '12px', color: '#999', margin: '0 0 14px 0', lineHeight: 1.5 }}>
+                  식단, 섭취법, 컨디션 변화 등 궁금한 점을<br />코치에게 1:1로 직접 질문해 보세요!
+                </p>
+                {openChatUrl ? (
+                  <a
+                    href={openChatUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      width: '100%',
+                      padding: '12px',
+                      borderRadius: '10px',
+                      backgroundColor: '#FEE500',
+                      color: '#191919',
+                      fontWeight: 700,
+                      fontSize: '13px',
+                      textDecoration: 'none',
+                      boxSizing: 'border-box',
+                      boxShadow: '0 2px 8px rgba(254, 229, 0, 0.2)'
+                    }}
+                  >
+                    <span>💬</span> 1:1 카톡 질문하기
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => alert('코치 1:1 채팅방 링크 준비 중입니다.\n잠시 후 다시 이용해 주세요!')}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: '8px',
+                      width: '100%',
+                      padding: '12px',
+                      borderRadius: '10px',
+                      backgroundColor: '#262626',
+                      color: '#777',
+                      fontWeight: 600,
+                      fontSize: '13px',
+                      border: '1px solid #333',
+                      boxSizing: 'border-box',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <span>💬</span> 1:1 상담 준비 중
+                  </button>
+                )}
               </div>
             </>
           )}
