@@ -3,6 +3,10 @@
 import React, { useState, useEffect, useMemo, useRef, UIEvent } from 'react';
 import { supabase } from '../lib/supabase';
 
+// 🔒 1:1 카카오톡 오픈채팅 고정 링크 (다른 관리자가 대시보드에서 수정 불가)
+// 어머님의 오픈프로필 또는 1:1 오픈채팅 링크 주소를 아래 따옴표 안에 넣어주세요.
+const OPEN_CHAT_URL = 'https://open.kakao.com/o/sNeiChPi';
+
 const INITIAL_MISSIONS = [
   { id: 'water', group: 'essential', icon: '💧', title: '수분섭취 · Water Intake', sub: '하루 1.5~2L', done: false },
   { id: 'juice', group: 'essential', icon: '🥤', title: 'PM 주스 섭취 · PM Juice', sub: '파워칵테일 · 액티바이즈', done: false },
@@ -40,9 +44,8 @@ export default function Home() {
   const [selectedLecture, setSelectedLecture] = useState<any>(null);
   const [selectedMotivation, setSelectedMotivation] = useState<any>(null);
 
-  // 코치 설정 (코치 노트, 1:1 오카방 링크)
+  // 코치 노트 (DB 연동)
   const [coachNote, setCoachNote] = useState('가짜 배고픔은 뇌가 만든 착각이에요. 오늘도 나 자신을 믿고 루틴을 지켜봐요 🌤️');
-  const [openChatUrl, setOpenChatUrl] = useState('');
 
   // 닉네임 수정 모달
   const [isEditingName, setIsEditingName] = useState(false);
@@ -181,17 +184,15 @@ export default function Home() {
         if (firstMotivation) setSelectedMotivation(firstMotivation);
       }
 
-      // 2. 설정(코치 노트 및 1:1 오카방 링크) 불러오기
-      const { data: settingsData } = await supabase
+      // 2. 코치 노트 불러오기
+      const { data: noteData } = await supabase
         .from('app_settings')
-        .select('key, value')
-        .in('key', ['coach_note', 'open_chat_url']);
+        .select('value')
+        .eq('key', 'coach_note')
+        .maybeSingle();
 
-      if (settingsData && isMounted) {
-        settingsData.forEach(item => {
-          if (item.key === 'coach_note') setCoachNote(item.value);
-          if (item.key === 'open_chat_url') setOpenChatUrl(item.value);
-        });
+      if (noteData?.value && isMounted) {
+        setCoachNote(noteData.value);
       }
     };
 
@@ -790,7 +791,7 @@ export default function Home() {
             입금 확인 및 참가 승인 대기 중
           </h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', margin: '8px 0 16px' }}>
-            <span style={{ fontSize: '15px', color: '#3FD6A6', fontWeight: 600 }}>{profile?.nickname || '참가자'}</span>
+            <span style={{ fontSize: '15px', color: '#3FD6A6', fontWeight: 600 }}>{profile?.nickname || '참여자'}</span>
             <button
               onClick={() => setIsEditingName(true)}
               style={{ padding: '3px 8px', borderRadius: '6px', border: '1px solid #444', backgroundColor: '#222', color: '#ccc', fontSize: '11px', cursor: 'pointer' }}
@@ -1034,9 +1035,9 @@ export default function Home() {
                 <p style={{ fontSize: '12px', color: '#999', margin: '0 0 14px 0', lineHeight: 1.5 }}>
                   식단, 섭취법, 컨디션 변화 등 궁금한 점을<br />코치에게 1:1로 직접 질문해 보세요!
                 </p>
-                {openChatUrl ? (
+                {OPEN_CHAT_URL && !OPEN_CHAT_URL.includes('여기에_실제') ? (
                   <a
-                    href={openChatUrl}
+                    href={OPEN_CHAT_URL}
                     target="_blank"
                     rel="noopener noreferrer"
                     style={{
@@ -1061,7 +1062,7 @@ export default function Home() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => alert('코치 1:1 채팅방 링크 준비 중입니다.\n잠시 후 다시 이용해 주세요!')}
+                    onClick={() => alert('코치 1:1 채팅방 링크 준비 중입니다.\n코치님께 문의해 주세요!')}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',

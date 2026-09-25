@@ -43,29 +43,25 @@ export default function AdminPage() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // 코치 노트 및 1:1 오카방 링크 상태
+  // 코치 노트 상태
   const [coachNote, setCoachNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
-  const [openChatUrl, setOpenChatUrl] = useState('');
-  const [savingChatUrl, setSavingChatUrl] = useState(false);
 
   // 강의 등록/수정 모달 상태
   const [editingLecture, setEditingLecture] = useState<any>(null);
   const [isNewLecture, setIsNewLecture] = useState(false);
   const [isSavingLecture, setIsSavingLecture] = useState(false);
 
-  // 설정(코치 노트, 오픈채팅 링크) 불러오기
-  const fetchSettings = async () => {
+  // 코치 노트 불러오기
+  const fetchCoachNote = async () => {
     const { data } = await supabase
       .from('app_settings')
-      .select('key, value')
-      .in('key', ['coach_note', 'open_chat_url']);
+      .select('value')
+      .eq('key', 'coach_note')
+      .maybeSingle();
 
-    if (data) {
-      data.forEach(item => {
-        if (item.key === 'coach_note') setCoachNote(item.value);
-        if (item.key === 'open_chat_url') setOpenChatUrl(item.value);
-      });
+    if (data?.value) {
+      setCoachNote(data.value);
     }
   };
 
@@ -88,33 +84,11 @@ export default function AdminPage() {
         }, { onConflict: 'key' });
 
       if (error) throw error;
-      alert('코치 노트가 성공적으로 업데이트되었습니다!');
+      alert('코치 노트가 성공적으로 업데이트되었습니다!\n(모든 회원의 투데이 화면에 즉시 반영됩니다)');
     } catch (err: any) {
       alert(`저장 실패: ${err.message}`);
     } finally {
       setSavingNote(false);
-    }
-  };
-
-  // 1:1 오카방 링크 저장하기
-  const handleSaveChatUrl = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSavingChatUrl(true);
-    try {
-      const { error } = await supabase
-        .from('app_settings')
-        .upsert({
-          key: 'open_chat_url',
-          value: openChatUrl.trim(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'key' });
-
-      if (error) throw error;
-      alert('1:1 오픈카톡 링크가 업데이트되었습니다!\n(사용자 화면의 1:1 질문 버튼에 즉시 연동됩니다)');
-    } catch (err: any) {
-      alert(`저장 실패: ${err.message}`);
-    } finally {
-      setSavingChatUrl(false);
     }
   };
 
@@ -183,7 +157,7 @@ export default function AdminPage() {
     if (isAuthenticated) {
       fetchParticipants();
       fetchLectures();
-      fetchSettings();
+      fetchCoachNote();
     }
   }, [isAuthenticated]);
 
@@ -633,7 +607,7 @@ export default function AdminPage() {
                 <h1>대시보드</h1>
                 <div className="sub">개인별 루틴 진행 현황 · {toKSTDateString()} 기준</div>
               </div>
-              <button onClick={() => { fetchParticipants(); fetchSettings(); }} className="btn-table">🔄 새로고침</button>
+              <button onClick={() => { fetchParticipants(); fetchCoachNote(); }} className="btn-table">🔄 새로고침</button>
             </div>
 
             <div className="kpi-grid">
@@ -654,109 +628,54 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 설정 영역 (코치 노트 + 1:1 오카방 링크) */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '16px', marginTop: '20px' }}>
-              {/* 1. 코치 노트 편집 패널 */}
-              <div style={{ backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 style={{ fontSize: '13.5px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
-                      📝 COACH'S NOTE (응원 문구)
-                    </h3>
-                    <span style={{ fontSize: '11px', color: '#3FD6A6' }}>투데이 탭 노출</span>
-                  </div>
-                  <form onSubmit={handleSaveCoachNote}>
-                    <textarea
-                      rows={2}
-                      value={coachNote}
-                      onChange={e => setCoachNote(e.target.value)}
-                      placeholder="회원들의 투데이 화면에 띄울 오늘의 응원 메시지나 공지사항을 입력해 주세요."
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #333',
-                        backgroundColor: '#111',
-                        color: '#fff',
-                        fontSize: '12.5px',
-                        lineHeight: 1.5,
-                        boxSizing: 'border-box',
-                        outline: 'none',
-                        resize: 'none',
-                        marginBottom: '8px',
-                      }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <button
-                        type="submit"
-                        disabled={savingNote}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '6px',
-                          backgroundColor: '#3FD6A6',
-                          color: '#000',
-                          fontWeight: 700,
-                          fontSize: '11.5px',
-                          border: 'none',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {savingNote ? '저장 중...' : '✓ 코치 노트 저장'}
-                      </button>
-                    </div>
-                  </form>
-                </div>
+            {/* 코치 노트 편집 패널 (링크 입력창 제거로 간결화) */}
+            <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
+                  📝 COACH'S NOTE (회원 전체 공지 / 응원 문구)
+                </h3>
+                <span style={{ fontSize: '11px', color: '#3FD6A6' }}>투데이 탭 하단 실시간 노출</span>
               </div>
-
-              {/* 2. 1:1 오픈카톡 링크 설정 패널 */}
-              <div style={{ backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-                <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                    <h3 style={{ fontSize: '13.5px', fontWeight: 'bold', margin: 0, color: '#FEE500' }}>
-                      💬 1:1 오픈채팅 URL 설정
-                    </h3>
-                    <span style={{ fontSize: '11px', color: '#aaa' }}>1:1 질문 버튼 연동</span>
-                  </div>
-                  <form onSubmit={handleSaveChatUrl}>
-                    <input
-                      type="text"
-                      value={openChatUrl}
-                      onChange={e => setOpenChatUrl(e.target.value)}
-                      placeholder="예: https://open.kakao.com/o/sXXXXXX"
-                      style={{
-                        width: '100%',
-                        padding: '10px 12px',
-                        borderRadius: '8px',
-                        border: '1px solid #333',
-                        backgroundColor: '#111',
-                        color: '#fff',
-                        fontSize: '12.5px',
-                        boxSizing: 'border-box',
-                        outline: 'none',
-                        marginBottom: '8px',
-                      }}
-                    />
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <button
-                        type="submit"
-                        disabled={savingChatUrl}
-                        style={{
-                          padding: '7px 14px',
-                          borderRadius: '6px',
-                          backgroundColor: '#FEE500',
-                          color: '#191919',
-                          fontWeight: 700,
-                          fontSize: '11.5px',
-                          border: 'none',
-                          cursor: 'pointer',
-                        }}
-                      >
-                        {savingChatUrl ? '저장 중...' : '✓ 카톡 링크 저장'}
-                      </button>
-                    </div>
-                  </form>
+              <form onSubmit={handleSaveCoachNote}>
+                <textarea
+                  rows={2}
+                  value={coachNote}
+                  onChange={e => setCoachNote(e.target.value)}
+                  placeholder="회원들의 투데이 화면에 띄울 오늘의 응원 메시지나 공지사항을 입력해 주세요."
+                  style={{
+                    width: '100%',
+                    padding: '12px 14px',
+                    borderRadius: '10px',
+                    border: '1px solid #333',
+                    backgroundColor: '#111',
+                    color: '#fff',
+                    fontSize: '13px',
+                    lineHeight: 1.5,
+                    boxSizing: 'border-box',
+                    outline: 'none',
+                    resize: 'none',
+                    marginBottom: '10px',
+                  }}
+                />
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="submit"
+                    disabled={savingNote}
+                    style={{
+                      padding: '8px 16px',
+                      borderRadius: '8px',
+                      backgroundColor: '#3FD6A6',
+                      color: '#000',
+                      fontWeight: 700,
+                      fontSize: '12px',
+                      border: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {savingNote ? '저장 중...' : '✓ 코치 노트 업데이트'}
+                  </button>
                 </div>
-              </div>
+              </form>
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
