@@ -40,6 +40,9 @@ export default function Home() {
   const [selectedLecture, setSelectedLecture] = useState<any>(null);
   const [selectedMotivation, setSelectedMotivation] = useState<any>(null);
 
+  // 코치 노트 (DB 연동)
+  const [coachNote, setCoachNote] = useState('가짜 배고픔은 뇌가 만든 착각이에요. 오늘도 나 자신을 믿고 루틴을 지켜봐요 🌤️');
+
   // 닉네임 수정 모달
   const [isEditingName, setIsEditingName] = useState(false);
   const [inputNickname, setInputNickname] = useState('');
@@ -165,15 +168,27 @@ export default function Home() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadLectures = async () => {
-      const { data } = await supabase.from('lectures').select('*').order('day', { ascending: true });
-      if (data && isMounted) {
-        setLectures(data);
-        const firstHealth = data.find(l => !l.category || l.category === 'health');
+    const loadLecturesAndSettings = async () => {
+      // 1. 강의 목록 불러오기
+      const { data: lecData } = await supabase.from('lectures').select('*').order('day', { ascending: true });
+      if (lecData && isMounted) {
+        setLectures(lecData);
+        const firstHealth = lecData.find(l => !l.category || l.category === 'health');
         if (firstHealth) setSelectedLecture(firstHealth);
 
-        const firstMotivation = data.find(l => l.category === 'motivation');
+        const firstMotivation = lecData.find(l => l.category === 'motivation');
         if (firstMotivation) setSelectedMotivation(firstMotivation);
+      }
+
+      // 2. 코치 노트 불러오기
+      const { data: noteData } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'coach_note')
+        .maybeSingle();
+
+      if (noteData?.value && isMounted) {
+        setCoachNote(noteData.value);
       }
     };
 
@@ -227,7 +242,7 @@ export default function Home() {
     };
 
     getInitialSession();
-    loadLectures();
+    loadLecturesAndSettings();
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user && isMounted) {
@@ -403,7 +418,6 @@ export default function Home() {
   const wellbeingDone = wellbeingMissions.filter(m => m.done).length;
   const totalPercent = Math.round(((essentialDone + wellbeingDone) / missions.length) * 100);
 
-  // 강의 분류 필터링
   const healthLectures = useMemo(() => {
     return lectures.filter(l => !l.category || l.category === 'health');
   }, [lectures]);
@@ -412,7 +426,6 @@ export default function Home() {
     return lectures.filter(l => l.category === 'motivation');
   }, [lectures]);
 
-  // 오늘 Day의 건강 강의 (없으면 안내용 기본값)
   const todayLecture = healthLectures.find(l => l.day === userDay);
 
   const getEmbedUrl = (url: string) => {
@@ -931,7 +944,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 투데이 상단 강의 카드 (등록된 오늘 강의가 있을 때만 노출) */}
+              {/* 투데이 상단 강의 카드 */}
               <div className="lecture-hero" onClick={() => setCurrentTab('class')} style={{ cursor: 'pointer' }}>
                 <div className="daytag">DAY {userDay}</div>
                 <h3 className="ttl">{todayLecture?.title || `Day ${userDay} 건강 클래스`}</h3>
@@ -994,9 +1007,10 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* DB 연동된 코치 노트 */}
               <div className="msg-card">
                 <div className="k">COACH'S NOTE · 매일 업데이트</div>
-                <p>가짜 배고픔은 뇌가 만든 착각이에요. 오늘도 나 자신을 믿고 루틴을 지켜봐요 🌤️</p>
+                <p style={{ whiteSpace: 'pre-wrap' }}>{coachNote}</p>
               </div>
             </>
           )}
