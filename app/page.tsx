@@ -17,7 +17,6 @@ const INITIAL_MISSIONS = [
 ];
 
 export default function Home() {
-  // 4개 탭 지원: 'today' | 'class' | 'baekddakmi' | 'record'
   const [currentTab, setCurrentTab] = useState<'today' | 'class' | 'baekddakmi' | 'record'>('today');
   const [missions, setMissions] = useState(INITIAL_MISSIONS);
   const [confettis, setConfettis] = useState<any[]>([]);
@@ -29,7 +28,7 @@ export default function Home() {
   const [profile, setProfile] = useState<any>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // 개인정보 약관 동의 및 모달 상태
+  // 약관 모달
   const [isAgreed, setIsAgreed] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [hasScrolledToBottom, setHasScrolledToBottom] = useState(false);
@@ -52,17 +51,17 @@ export default function Home() {
   const [inputTargetWeight, setInputTargetWeight] = useState('');
   const [savingBody, setSavingBody] = useState(false);
 
-  // 체중 기록 관련 상태
+  // 체중 기록 상태
   const [weightRecords, setWeightRecords] = useState<any[]>([]);
   const [inputWeight, setInputWeight] = useState('');
   const [inputMemo, setInputMemo] = useState('');
   const [isSavingRecord, setIsSavingRecord] = useState(false);
   const [recordViewRange, setRecordViewRange] = useState<'7days' | 'all'>('7days');
 
-  // 전체 기간 미션 로그 (일자별 카운트용)
+  // 전체 기간 미션 로그
   const [allMissionLogs, setAllMissionLogs] = useState<any[]>([]);
 
-  // 한국 시간(KST) 기준 YYYY-MM-DD 문자열 추출
+  // 한국 시간(KST) 기준 YYYY-MM-DD
   const toKSTDateString = (dateInput: Date | string = new Date()) => {
     const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
     return new Intl.DateTimeFormat('en-CA', {
@@ -73,11 +72,8 @@ export default function Home() {
     }).format(d);
   };
 
-  const getTodayString = () => {
-    return toKSTDateString(new Date());
-  };
+  const getTodayString = () => toKSTDateString(new Date());
 
-  // Day 계산
   const calculateUserDay = (approvedAt: string | null) => {
     if (!approvedAt) return 1;
 
@@ -94,7 +90,6 @@ export default function Home() {
     return Math.max(1, diffDays + 1);
   };
 
-  // 특정 Day의 한국 날짜 YYYY-MM-DD 구하기
   const getDateOfDay = (approvedAt: string | null, dayNum: number) => {
     if (!approvedAt) return '';
     const approvedYMD = toKSTDateString(approvedAt);
@@ -104,7 +99,6 @@ export default function Home() {
     return targetUtc.toISOString().split('T')[0];
   };
 
-  // BMI 계산
   const calculateBMI = (heightCm: number, weightKg: number) => {
     if (!heightCm || !weightKg || heightCm <= 0 || weightKg <= 0) return 0;
     const heightM = heightCm / 100;
@@ -119,7 +113,6 @@ export default function Home() {
     return { text: '비만', color: '#FC8181' };
   };
 
-  // 사용자의 모든 미션 로그 로드
   const loadUserMissionLogs = async (userId: string) => {
     try {
       const { data, error } = await supabase
@@ -130,7 +123,6 @@ export default function Home() {
       if (!error && data) {
         setAllMissionLogs(data);
 
-        // 오늘 미션 상태 반영
         const todayStr = getTodayString();
         const todayCompleted = new Set(
           data.filter(d => d.log_date === todayStr && d.completed).map(d => d.mission_id)
@@ -148,7 +140,6 @@ export default function Home() {
     }
   };
 
-  // 체중 기록 로드
   const loadWeightRecords = async (userId: string) => {
     try {
       const { data, error } = await supabase
@@ -207,6 +198,7 @@ export default function Home() {
             id: currentUser.id,
             nickname: initialName,
             status: 'pending',
+            challenge_duration: 30,
           };
           await supabase.from('profiles').upsert([newProfile]);
           setProfile(newProfile);
@@ -267,7 +259,6 @@ export default function Home() {
     setProfile(null);
   };
 
-  // 약관 팝업 내부 스크롤 감지
   const handleScrollTerms = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
     const isBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 8;
@@ -354,7 +345,6 @@ export default function Home() {
     }
   };
 
-  // 미션 체크 클릭
   const toggleMission = async (id: string) => {
     if (!user) return;
     const target = missions.find(m => m.id === id);
@@ -413,7 +403,7 @@ export default function Home() {
   const wellbeingDone = wellbeingMissions.filter(m => m.done).length;
   const totalPercent = Math.round(((essentialDone + wellbeingDone) / missions.length) * 100);
 
-  // 강의 분류 필터링 (클래스 vs 백딱미)
+  // 강의 분류 필터링
   const healthLectures = useMemo(() => {
     return lectures.filter(l => !l.category || l.category === 'health');
   }, [lectures]);
@@ -422,11 +412,8 @@ export default function Home() {
     return lectures.filter(l => l.category === 'motivation');
   }, [lectures]);
 
-  const todayLecture = healthLectures.find(l => l.day === userDay) || {
-    day: userDay,
-    title: '의지력이 아닌 뇌를 속이는 1%의 기적',
-    description: '"다이어트, 매번 의지력 부족으로 실패하셨나요? 여러분의 잘못이 아닙니다."',
-  };
+  // 오늘 Day의 건강 강의 (없으면 안내용 기본값)
+  const todayLecture = healthLectures.find(l => l.day === userDay);
 
   const getEmbedUrl = (url: string) => {
     if (!url) return '';
@@ -435,7 +422,6 @@ export default function Home() {
     return url;
   };
 
-  // 누적 완주 일수 계산
   const completedDaysCount = useMemo(() => {
     const dateCountMap: { [date: string]: number } = {};
     const todayStr = getTodayString();
@@ -457,10 +443,11 @@ export default function Home() {
     return count;
   }, [allMissionLogs, missions]);
 
-  // Day별 미션 달성 히스토리 데이터
+  const userDuration = profile?.challenge_duration || 30;
+
   const missionHistoryList = useMemo(() => {
     const list: any[] = [];
-    const maxDay = Math.max(1, Math.min(30, userDay));
+    const maxDay = Math.max(1, Math.min(userDuration, userDay));
     const todayDoneCount = missions.filter(m => m.done).length;
     const todayStr = getTodayString();
 
@@ -488,15 +475,14 @@ export default function Home() {
       return list.slice(-7);
     }
     return list;
-  }, [userDay, profile?.approved_at, allMissionLogs, recordViewRange, missions]);
+  }, [userDay, userDuration, profile?.approved_at, allMissionLogs, recordViewRange, missions]);
 
-  // 체중 기록 통계
   const displayedRecords = useMemo(() => {
     if (recordViewRange === '7days') {
       return weightRecords.slice(-7);
     }
-    return weightRecords.slice(-30);
-  }, [weightRecords, recordViewRange]);
+    return weightRecords.slice(-userDuration);
+  }, [weightRecords, recordViewRange, userDuration]);
 
   const startWeight = weightRecords.length > 0 ? weightRecords[0].weight : null;
   const latestRecord = weightRecords.length > 0 ? weightRecords[weightRecords.length - 1] : null;
@@ -520,7 +506,7 @@ export default function Home() {
     );
   }
 
-  // 1. 비로그인 화면 (약관 동의 및 카카오 로그인)
+  // 1. 비로그인 화면
   if (!user) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -662,16 +648,15 @@ export default function Home() {
 
                 <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제3조 (개인정보의 보유 및 이용 기간)</p>
                 <p style={{ marginBottom: '12px' }}>
-                  1. 본 서비스의 챌린지 이용 권한은 승인일로부터 30일간 유지되며, 30일 경과 시 챌린지 이용 승인은 자동으로 종료(해제)됩니다.<br />
+                  1. 본 서비스의 챌린지 이용 권한은 승인일로부터 지정된 챌린지 기간(30일 또는 100일) 동안 유지되며, 해당 기간 경과 시 챌린지 이용 승인은 자동으로 종료(해제)됩니다.<br />
                   2. 이용 승인이 종료된 이후에도 회원의 재참여 지원 및 과거 루틴 이력 조회를 위해, 수집된 정보는 회원 탈퇴 요청 시까지 안전하게 보관됩니다.<br />
-                  3. 정보주체가 회원 탈퇴를 요청하거나 서비스가 최종 종료되는 경우, 수집된 모든 개인정보 및 활동 기록은 지체 없이 영구 파기합니다.<br />
-                  4. 단, 관계 법령에 따라 보존 의무가 있는 경우 해당 법령이 정한 기간 동안 안전하게 분리 보관합니다.
+                  3. 정보주체가 회원 탈퇴를 요청하거나 서비스가 최종 종료되는 경우, 수집된 모든 개인정보 및 활동 기록은 지체 없이 영구 파기합니다.
                 </p>
 
                 <p style={{ fontWeight: 700, color: '#ffffff', marginBottom: '4px' }}>제4조 (동의 거부 권리 및 불이익 안내)</p>
                 <p>
                   1. 정보주체는 본 개인정보 수집 및 이용 동의를 거부할 권리가 있습니다.<br />
-                  2. 단, 수집 항목은 카카오 계정 기반 회원 식별 및 30일 루틴 챌린지 기록 저장을 위한 필수 최소 항목이므로, 동의를 거부하실 경우 카카오 로그인 및 서비스 이용이 불가능합니다.
+                  2. 단, 필수 수집 항목에 대한 동의를 거부하실 경우 카카오 로그인 및 서비스 이용이 불가능합니다.
                 </p>
 
                 <div style={{ height: '30px' }} />
@@ -728,17 +713,17 @@ export default function Home() {
   }
 
   // 2. 만료 화면
-  if (profile?.status === 'approved' && userDay > 30) {
+  if (profile?.status === 'approved' && userDay > userDuration) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
         <div style={{ width: '100%', maxWidth: '390px', backgroundColor: '#121212', borderRadius: '28px', border: '1px solid #262626', padding: '48px 24px', display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center' }}>
           <div style={{ fontSize: '44px', marginBottom: '16px' }}>🏁</div>
           <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff', marginBottom: '8px' }}>
-            챌린지 솔루션 기간이 만료되었습니다
+            {userDuration}일 챌린지 기간이 만료되었습니다
           </h2>
           <p style={{ fontSize: '13px', color: '#888', lineHeight: 1.6, marginBottom: '24px' }}>
-            수고 많으셨습니다, <strong>{profile?.nickname}</strong>님!<br />
-            다음 기수 재참여 또는 연장은 코치님께 문의해 주세요.
+            {userDuration}일 동안 수고 많으셨습니다, <strong>{profile?.nickname}</strong>님!<br />
+            다음 기수 재참여 또는 추가 연장은 코치님께 문의해 주세요.
           </p>
           <button onClick={handleLogout} style={{ padding: '10px 20px', borderRadius: '8px', border: '1px solid #333', backgroundColor: '#222', color: '#aaa', cursor: 'pointer', fontSize: '12px' }}>
             로그아웃
@@ -933,7 +918,7 @@ export default function Home() {
               {/* 상단 상태 스트립 */}
               <div className="status-strip">
                 <div className="cell">
-                  <div className="num">Day {userDay}</div>
+                  <div className="num">Day {userDay} / {userDuration}</div>
                   <div className="lab">CHALLENGE</div>
                 </div>
                 <div className="cell">
@@ -946,10 +931,11 @@ export default function Home() {
                 </div>
               </div>
 
+              {/* 투데이 상단 강의 카드 (등록된 오늘 강의가 있을 때만 노출) */}
               <div className="lecture-hero" onClick={() => setCurrentTab('class')} style={{ cursor: 'pointer' }}>
-                <div className="daytag">DAY {todayLecture.day}</div>
-                <h3 className="ttl">{todayLecture.title}</h3>
-                <div className="sub">{todayLecture.description || '오늘의 건강 강의를 시청하고 루틴을 시작해보세요!'}</div>
+                <div className="daytag">DAY {userDay}</div>
+                <h3 className="ttl">{todayLecture?.title || `Day ${userDay} 건강 클래스`}</h3>
+                <div className="sub">{todayLecture?.description || '오늘의 건강 강의를 시청하고 루틴을 시작해보세요!'}</div>
               </div>
 
               <div className="mission-card">
@@ -1015,7 +1001,7 @@ export default function Home() {
             </>
           )}
 
-          {/* 탭 2: 클래스 (건강 강의) */}
+          {/* 탭 2: 클래스 */}
           {currentTab === 'class' && (
             <div style={{ padding: '16px 0' }}>
               <div style={{ marginBottom: '18px' }}>
@@ -1025,98 +1011,102 @@ export default function Home() {
                 </p>
               </div>
 
-              {selectedLecture && (
-                <div style={{ marginBottom: '20px', backgroundColor: '#161616', borderRadius: '16px', overflow: 'hidden', border: '1px solid #333' }}>
-                  {selectedLecture.video_url ? (
-                    <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
-                      <iframe
-                        src={getEmbedUrl(selectedLecture.video_url)}
-                        title={selectedLecture.title}
-                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    </div>
-                  ) : (
-                    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>
-                      🎬 영상 준비 중입니다.
+              {healthLectures.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '50px 20px', backgroundColor: '#141414', borderRadius: '16px', border: '1px solid #222', color: '#777' }}>
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>🎓</div>
+                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#aaa' }}>등록된 클래스 영상이 없습니다.</div>
+                  <div style={{ fontSize: '12px', marginTop: '4px' }}>관리자가 새로운 강의를 등록하면 이곳에 자동으로 표시됩니다.</div>
+                </div>
+              ) : (
+                <>
+                  {selectedLecture && (
+                    <div style={{ marginBottom: '20px', backgroundColor: '#161616', borderRadius: '16px', overflow: 'hidden', border: '1px solid #333' }}>
+                      {selectedLecture.video_url ? (
+                        <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
+                          <iframe
+                            src={getEmbedUrl(selectedLecture.video_url)}
+                            title={selectedLecture.title}
+                            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ padding: '40px 20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>
+                          🎬 영상 준비 중입니다.
+                        </div>
+                      )}
+                      <div style={{ padding: '16px' }}>
+                        <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>DAY {selectedLecture.day}</span>
+                        <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px' }}>{selectedLecture.title}</h3>
+                        <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedLecture.description}</p>
+                      </div>
                     </div>
                   )}
-                  <div style={{ padding: '16px' }}>
-                    <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>DAY {selectedLecture.day}</span>
-                    <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px' }}>{selectedLecture.title}</h3>
-                    <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedLecture.description}</p>
-                  </div>
-                </div>
-              )}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {healthLectures.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '30px 10px', color: '#777', fontSize: '12px' }}>
-                    등록된 클래스 영상이 없습니다.
-                  </div>
-                ) : (
-                  healthLectures.map(lec => {
-                    const isUnlocked = lec.day <= userDay;
-                    return (
-                      <div
-                        key={lec.day}
-                        onClick={() => isUnlocked && setSelectedLecture(lec)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '14px 16px',
-                          backgroundColor: isUnlocked ? '#181818' : '#111',
-                          borderRadius: '12px',
-                          border: isUnlocked ? '1px solid #2a2a2a' : '1px solid #1a1a1a',
-                          cursor: isUnlocked ? 'pointer' : 'not-allowed',
-                          opacity: isUnlocked ? 1 : 0.45,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div
-                            style={{
-                              width: '36px',
-                              height: '36px',
-                              borderRadius: '8px',
-                              backgroundColor: isUnlocked ? 'rgba(63, 214, 166, 0.15)' : '#222',
-                              color: isUnlocked ? '#3FD6A6' : '#666',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '12px',
-                            }}
-                          >
-                            {lec.day}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {healthLectures.map(lec => {
+                      const isUnlocked = lec.day <= userDay;
+                      return (
+                        <div
+                          key={lec.day}
+                          onClick={() => isUnlocked && setSelectedLecture(lec)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '14px 16px',
+                            backgroundColor: isUnlocked ? '#181818' : '#111',
+                            borderRadius: '12px',
+                            border: isUnlocked ? '1px solid #2a2a2a' : '1px solid #1a1a1a',
+                            cursor: isUnlocked ? 'pointer' : 'not-allowed',
+                            opacity: isUnlocked ? 1 : 0.45,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div
+                              style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '8px',
+                                backgroundColor: isUnlocked ? 'rgba(63, 214, 166, 0.15)' : '#222',
+                                color: isUnlocked ? '#3FD6A6' : '#666',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: '12px',
+                              }}
+                            >
+                              {lec.day}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
+                                {lec.title}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
+                                {lec.week}
+                              </div>
+                            </div>
                           </div>
+
                           <div>
-                            <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
-                              {lec.title}
-                            </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                              {lec.week}
-                            </div>
+                            {isUnlocked ? (
+                              <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>▶ 시청</span>
+                            ) : (
+                              <span style={{ fontSize: '12px' }}>🔒</span>
+                            )}
                           </div>
                         </div>
-
-                        <div>
-                          {isUnlocked ? (
-                            <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>▶ 시청</span>
-                          ) : (
-                            <span style={{ fontSize: '12px' }}>🔒</span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* 탭 3: 🔥 백딱미 (동기부여 영상) */}
+          {/* 탭 3: 🔥 백딱미 */}
           {currentTab === 'baekddakmi' && (
             <div style={{ padding: '16px 0' }}>
               <div style={{ marginBottom: '18px' }}>
@@ -1127,98 +1117,102 @@ export default function Home() {
                   </span>
                 </div>
                 <p style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '6px' }}>
-                  지칠 때마다 꺼내보는 멘탈 관리 & 불꽃 동기부여 영상입니다.
+                  지칠 때마다 꺼내보는 멘탈 관리 & 동기부여 영상입니다.
                 </p>
               </div>
 
-              {selectedMotivation && (
-                <div style={{ marginBottom: '20px', backgroundColor: '#161616', borderRadius: '16px', overflow: 'hidden', border: '1px solid #FF5E3A44' }}>
-                  {selectedMotivation.video_url ? (
-                    <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
-                      <iframe
-                        src={getEmbedUrl(selectedMotivation.video_url)}
-                        title={selectedMotivation.title}
-                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                      />
-                    </div>
-                  ) : (
-                    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>
-                      🔥 영상 준비 중입니다.
+              {motivationLectures.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '50px 20px', backgroundColor: '#141414', borderRadius: '16px', border: '1px solid #222', color: '#777' }}>
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔥</div>
+                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#FF5E3A' }}>등록된 백딱미 영상이 없습니다.</div>
+                  <div style={{ fontSize: '12px', marginTop: '4px' }}>관리자가 동기부여 영상을 등록하면 이곳에 자동으로 표시됩니다.</div>
+                </div>
+              ) : (
+                <>
+                  {selectedMotivation && (
+                    <div style={{ marginBottom: '20px', backgroundColor: '#161616', borderRadius: '16px', overflow: 'hidden', border: '1px solid #FF5E3A44' }}>
+                      {selectedMotivation.video_url ? (
+                        <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
+                          <iframe
+                            src={getEmbedUrl(selectedMotivation.video_url)}
+                            title={selectedMotivation.title}
+                            style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            allowFullScreen
+                          />
+                        </div>
+                      ) : (
+                        <div style={{ padding: '40px 20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>
+                          🔥 영상 준비 중입니다.
+                        </div>
+                      )}
+                      <div style={{ padding: '16px' }}>
+                        <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>DAY {selectedMotivation.day} 백딱미</span>
+                        <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px', color: '#fff' }}>{selectedMotivation.title}</h3>
+                        <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedMotivation.description}</p>
+                      </div>
                     </div>
                   )}
-                  <div style={{ padding: '16px' }}>
-                    <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>DAY {selectedMotivation.day} 백딱미</span>
-                    <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px', color: '#fff' }}>{selectedMotivation.title}</h3>
-                    <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedMotivation.description}</p>
-                  </div>
-                </div>
-              )}
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {motivationLectures.length === 0 ? (
-                  <div style={{ textAlign: 'center', padding: '40px 10px', color: '#777', fontSize: '12px' }}>
-                    등록된 백딱미 영상이 없습니다.<br />관리자 페이지에서 백딱미 영상을 등록해 보세요!
-                  </div>
-                ) : (
-                  motivationLectures.map(lec => {
-                    const isUnlocked = lec.day <= userDay;
-                    return (
-                      <div
-                        key={lec.day}
-                        onClick={() => isUnlocked && setSelectedMotivation(lec)}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          padding: '14px 16px',
-                          backgroundColor: isUnlocked ? '#181818' : '#111',
-                          borderRadius: '12px',
-                          border: isUnlocked ? '1px solid #332222' : '1px solid #1a1a1a',
-                          cursor: isUnlocked ? 'pointer' : 'not-allowed',
-                          opacity: isUnlocked ? 1 : 0.45,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                          <div
-                            style={{
-                              width: '36px',
-                              height: '36px',
-                              borderRadius: '8px',
-                              backgroundColor: isUnlocked ? 'rgba(255, 94, 58, 0.18)' : '#222',
-                              color: isUnlocked ? '#FF5E3A' : '#666',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              fontWeight: 700,
-                              fontSize: '12px',
-                            }}
-                          >
-                            {lec.day}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {motivationLectures.map(lec => {
+                      const isUnlocked = lec.day <= userDay;
+                      return (
+                        <div
+                          key={lec.day}
+                          onClick={() => isUnlocked && setSelectedMotivation(lec)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            padding: '14px 16px',
+                            backgroundColor: isUnlocked ? '#181818' : '#111',
+                            borderRadius: '12px',
+                            border: isUnlocked ? '1px solid #332222' : '1px solid #1a1a1a',
+                            cursor: isUnlocked ? 'pointer' : 'not-allowed',
+                            opacity: isUnlocked ? 1 : 0.45,
+                          }}
+                        >
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <div
+                              style={{
+                                width: '36px',
+                                height: '36px',
+                                borderRadius: '8px',
+                                backgroundColor: isUnlocked ? 'rgba(255, 94, 58, 0.18)' : '#222',
+                                color: isUnlocked ? '#FF5E3A' : '#666',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                fontWeight: 700,
+                                fontSize: '12px',
+                              }}
+                            >
+                              {lec.day}
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
+                                {lec.title}
+                              </div>
+                              <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
+                                {lec.week}
+                              </div>
+                            </div>
                           </div>
+
                           <div>
-                            <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
-                              {lec.title}
-                            </div>
-                            <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                              {lec.week}
-                            </div>
+                            {isUnlocked ? (
+                              <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>🔥 시청</span>
+                            ) : (
+                              <span style={{ fontSize: '12px' }}>🔒</span>
+                            )}
                           </div>
                         </div>
-
-                        <div>
-                          {isUnlocked ? (
-                            <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>🔥 시청</span>
-                          ) : (
-                            <span style={{ fontSize: '12px' }}>🔒</span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -1249,7 +1243,7 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 신체 상태 요약 카드 행 */}
+              {/* 신체 상태 요약 */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '16px' }}>
                 <div style={{ backgroundColor: '#161616', padding: '12px 8px', borderRadius: '12px', border: '1px solid #282828', textAlign: 'center' }}>
                   <div style={{ fontSize: '11px', color: '#888' }}>현재 체중</div>
@@ -1284,7 +1278,7 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* 일차별 미션 달성 현황 카드 리스트 */}
+              {/* 일차별 미션 달성 현황 */}
               <div style={{ backgroundColor: '#141414', borderRadius: '16px', padding: '16px', border: '1px solid #222', marginBottom: '20px' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1461,7 +1455,7 @@ export default function Home() {
                 </form>
               </div>
 
-              {/* 체중 기록 히스토리 뷰 & 기간 토글 */}
+              {/* 체중 기록 히스토리 뷰 */}
               <div style={{ backgroundColor: '#141414', borderRadius: '16px', padding: '16px', border: '1px solid #222' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
                   <h3 style={{ fontSize: '13px', fontWeight: 'bold', margin: 0 }}>📈 체중 변화 추이</h3>
@@ -1547,7 +1541,7 @@ export default function Home() {
           )}
         </div>
 
-        {/* 4개 탭 네비게이션 바 (투데이 / 클래스 / 🔥 백딱미 / 나의 기록) */}
+        {/* 하단 4개 탭 바 */}
         <nav
           className="tabbar"
           style={{

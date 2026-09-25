@@ -42,8 +42,9 @@ export default function AdminPage() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // 강의 수정 모달 상태 (category 필드 지원)
+  // 강의 등록/수정 모달 상태
   const [editingLecture, setEditingLecture] = useState<any>(null);
+  const [isNewLecture, setIsNewLecture] = useState(false);
   const [isSavingLecture, setIsSavingLecture] = useState(false);
 
   // 강의 목록 불러오기
@@ -52,7 +53,7 @@ export default function AdminPage() {
     if (data) setDayList(data);
   };
 
-  // 회원 목록 불러오기 (미션 완료 일수 실시간 집계 연동)
+  // 회원 목록 불러오기
   const fetchParticipants = async () => {
     setLoading(true);
     try {
@@ -62,7 +63,6 @@ export default function AdminPage() {
       ]);
 
       if (!pError && profilesData) {
-        // 회원별 완주(10개 올클리어한 날) 일수 집계
         const userCompleteDaysMap: { [userId: string]: number } = {};
         if (missionLogsData) {
           const userDateCounts: { [userId: string]: { [date: string]: number } } = {};
@@ -80,6 +80,7 @@ export default function AdminPage() {
         const mapped = profilesData.map((p, idx) => {
           const currentDay = calculateAdminUserDay(p.approved_at);
           const realCompletedDays = userCompleteDaysMap[p.id] || 0;
+          const duration = p.challenge_duration || 30;
 
           return {
             id: p.id,
@@ -88,6 +89,7 @@ export default function AdminPage() {
             currentDay,
             streak: realCompletedDays,
             status: p.status || 'pending',
+            duration,
             rawApprovedAt: p.approved_at,
             height: p.height,
             target_weight: p.target_weight,
@@ -118,7 +120,28 @@ export default function AdminPage() {
     }
   };
 
-  // 1. 승인 / 승인 취소 (취소 시 mission_logs만 자동 초기화, 신체/체중 데이터는 보존)
+  // 회원별 챌린지 코스 기간 변경
+  const handleUpdateDuration = async (userId: string, newDuration: number) => {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ challenge_duration: newDuration })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      setParticipants(prev =>
+        prev.map(p => (p.id === userId ? { ...p, duration: newDuration } : p))
+      );
+      if (selectedUser?.id === userId) {
+        setSelectedUser((prev: any) => ({ ...prev, duration: newDuration }));
+      }
+    } catch (err: any) {
+      alert(`기간 변경 실패: ${err.message}`);
+    }
+  };
+
+  // 승인 / 승인 취소
   const toggleApproval = async (user: any) => {
     const isCancelling = user.status === 'approved';
 
@@ -126,7 +149,7 @@ export default function AdminPage() {
       const ok = confirm(
         `[승인 취소 / 기수 종료]\n\n` +
         `'${user.name}' 회원의 승인을 취소하시겠습니까?\n` +
-        `• 30일 루틴 체크(미션 로그)는 다음 기수를 위해 초기화됩니다.\n` +
+        `• 루틴 체크(미션 로그)는 다음 기수를 위해 초기화됩니다.\n` +
         `• 키, 목표체중, 체중 변화 기록은 안전하게 유지됩니다.`
       );
       if (!ok) return;
@@ -168,7 +191,7 @@ export default function AdminPage() {
     }
   };
 
-  // 2. 완전 탈퇴 처리 (영구 삭제: mission_logs, weight_records, profiles 전부 파기)
+  // 회원 완전 탈퇴
   const handleDeleteUserCompletely = async (user: any) => {
     const check1 = confirm(
       `⚠️ [회원 영구 탈퇴 및 데이터 완전 파기]\n\n` +
@@ -199,7 +222,7 @@ export default function AdminPage() {
     }
   };
 
-  // 대기자 전체 일괄 승인
+  // 대기자 전체 승인
   const handleApproveAll = async () => {
     const pendingUsers = participants.filter(p => p.status !== 'approved');
     if (pendingUsers.length === 0) {
@@ -229,7 +252,7 @@ export default function AdminPage() {
     }
   };
 
-  // 기수 종료: 전체 일괄 취소
+  // 전체 일괄 기수 종료
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -265,28 +288,47 @@ export default function AdminPage() {
     }
   };
 
-  // 강의 내용 저장 (카테고리: health / motivation 지원)
+  // 신규 영상 등록 모달 열기
+  const handleOpenNewLectureModal = () => {
+    const nextDay = dayList.length > 0 ? Math.max(...dayList.map(d => d.day)) + 1 : 1;
+    setEditingLecture({
+      day: nextDay,
+      week: `Week ${Math.ceil(nextDay / 7)}`,
+      title: '',
+      video_url: '',
+      description: '',
+      category: 'health',
+    });
+    setIsNewLecture(true);
+  };
+
+  // 강의 내용 저장 (신규 등록 및 기존 수정 겸용)
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
+    if (!editingLecture.day || editingLecture.day <= 0) {
+      alert('올바른 Day 숫자를 입력해 주세요.');
+      return;
+    }
+
     setIsSavingLecture(true);
 
     try {
       const { error } = await supabase
         .from('lectures')
         .upsert({
-          day: editingLecture.day,
-          week: editingLecture.week,
-          title: editingLecture.title,
-          video_url: editingLecture.video_url,
-          description: editingLecture.description,
+          day: Number(editingLecture.day),
+          week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
+          title: editingLecture.title || `Day ${editingLecture.day} 영상`,
+          video_url: editingLecture.video_url || '',
+          description: editingLecture.description || '',
           category: editingLecture.category || 'health',
-        });
+        }, { onConflict: 'day' });
 
       if (error) {
         alert(`저장 실패: ${error.message}`);
       } else {
-        alert(`Day ${editingLecture.day} 강의가 저장되었습니다.`);
+        alert(`Day ${editingLecture.day} 영상이 저장되었습니다.`);
         setEditingLecture(null);
         fetchLectures();
       }
@@ -294,6 +336,27 @@ export default function AdminPage() {
       alert(`오류: ${err.message}`);
     } finally {
       setIsSavingLecture(false);
+    }
+  };
+
+  // 강의 삭제
+  const handleDeleteLecture = async (lecture: any) => {
+    if (!confirm(`[Day ${lecture.day}] '${lecture.title}' 영상을 정말 삭제하시겠습니까?`)) {
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from('lectures')
+        .delete()
+        .eq('day', lecture.day);
+
+      if (error) throw error;
+
+      alert(`Day ${lecture.day} 영상이 삭제되었습니다.`);
+      fetchLectures();
+    } catch (err: any) {
+      alert(`삭제 실패: ${err.message}`);
     }
   };
 
@@ -324,15 +387,15 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* 강의 수정 모달 */}
+      {/* 강의 등록 및 수정 모달 */}
       {editingLecture && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <form onSubmit={handleSaveLecture} style={{ width: '100%', maxWidth: '460px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: '#fff' }}>
-              Day {editingLecture.day} 영상 설정
+              {isNewLecture ? '➕ 새 영상 등록' : `Day ${editingLecture.day} 영상 수정`}
             </h3>
             
-            {/* 카테고리 선택 */}
+            {/* 영상 분류 (건강 클래스 vs 백딱미) */}
             <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>영상 분류</label>
             <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
               <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: (!editingLecture.category || editingLecture.category === 'health') ? '1px solid #3FD6A6' : '1px solid #333', backgroundColor: (!editingLecture.category || editingLecture.category === 'health') ? '#3FD6A615' : '#222', cursor: 'pointer', fontSize: '13px', color: '#fff' }}>
@@ -360,11 +423,45 @@ export default function AdminPage() {
               </label>
             </div>
 
+            {/* Day 및 주차 번호 직접 입력 */}
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>오픈 Day (1~100)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={editingLecture.day || ''}
+                  onChange={e => {
+                    const d = Number(e.target.value);
+                    setEditingLecture({
+                      ...editingLecture,
+                      day: d,
+                      week: `Week ${Math.ceil(d / 7)}`
+                    });
+                  }}
+                  placeholder="예: 8"
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>주차 표시</label>
+                <input
+                  type="text"
+                  value={editingLecture.week || ''}
+                  onChange={e => setEditingLecture({ ...editingLecture, week: e.target.value })}
+                  placeholder="예: Week 2"
+                  style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+
             <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>영상 제목</label>
             <input
               type="text"
               value={editingLecture.title || ''}
               onChange={e => setEditingLecture({ ...editingLecture, title: e.target.value })}
+              placeholder="예: 2주차 시작: 디톡스를 돕는 물 마시기 비법"
               style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '12px', boxSizing: 'border-box' }}
             />
 
@@ -380,6 +477,7 @@ export default function AdminPage() {
             <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>핵심 요약 / 가이드 문구</label>
             <textarea
               rows={3}
+              placeholder="영상에 대한 핵심 설명이나 실천 가이드를 적어주세요."
               value={editingLecture.description || ''}
               onChange={e => setEditingLecture({ ...editingLecture, description: e.target.value })}
               style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '16px', boxSizing: 'border-box' }}
@@ -432,7 +530,7 @@ export default function AdminPage() {
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
                 <h1>대시보드</h1>
-                <div className="sub">개인별 30일 루틴 진행 현황 · {toKSTDateString()} 기준</div>
+                <div className="sub">개인별 루틴 진행 현황 · {toKSTDateString()} 기준</div>
               </div>
               <button onClick={fetchParticipants} className="btn-table">🔄 새로고침</button>
             </div>
@@ -465,7 +563,7 @@ export default function AdminPage() {
                     <div key={p.id} className="alert-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
                       <div>
                         <div style={{ fontWeight: 'bold' }}>{p.name}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-mid)' }}>신청일: {p.startDate}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-mid)' }}>신청일: {p.startDate} ({p.duration}일 코스)</div>
                       </div>
                       <button className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000' }} onClick={() => toggleApproval(p)}>
                         승인하기
@@ -490,12 +588,17 @@ export default function AdminPage() {
         {/* 콘텐츠 관리 */}
         {activeTab === 'content' && (
           <section>
-            <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">Day별 클래스 및 백딱미 영상을 등록·수정합니다. (카테고리별로 자동 분류됩니다)</div>
+                <div className="sub">클래스 및 백딱미 영상을 직접 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
               </div>
-              <button onClick={fetchLectures} className="btn-table">🔄 새로고침</button>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button onClick={handleOpenNewLectureModal} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
+                  ➕ 새 영상 등록하기
+                </button>
+                <button onClick={fetchLectures} className="btn-table">🔄 새로고침</button>
+              </div>
             </div>
 
             <div className="table-wrap">
@@ -504,39 +607,60 @@ export default function AdminPage() {
                   <tr>
                     <th style={{ width: '70px' }}>Day</th>
                     <th style={{ width: '120px' }}>분류</th>
-                    <th style={{ width: '110px' }}>주차</th>
+                    <th style={{ width: '100px' }}>주차</th>
                     <th>강의/영상 제목</th>
                     <th style={{ width: '110px' }}>영상 상태</th>
-                    <th style={{ width: '90px', textAlign: 'center' }}>관리</th>
+                    <th style={{ width: '130px', textAlign: 'center' }}>관리</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {dayList.map(d => (
-                    <tr key={d.day}>
-                      <td><strong>Day {d.day}</strong></td>
-                      <td>
-                        {d.category === 'motivation' ? (
-                          <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', fontWeight: 'bold' }}>
-                            🔥 백딱미
+                  {dayList.length === 0 ? (
+                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>등록된 영상이 없습니다. [+ 새 영상 등록하기]를 눌러보세요.</td></tr>
+                  ) : (
+                    dayList.map(d => (
+                      <tr key={d.day}>
+                        <td><strong>Day {d.day}</strong></td>
+                        <td>
+                          {d.category === 'motivation' ? (
+                            <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', fontWeight: 'bold' }}>
+                              🔥 백딱미
+                            </span>
+                          ) : (
+                            <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#3FD6A622', color: '#3FD6A6' }}>
+                              🎓 클래스
+                            </span>
+                          )}
+                        </td>
+                        <td style={{ color: 'var(--text-mid)' }}>{d.week}</td>
+                        <td>{d.title}</td>
+                        <td>
+                          <span className={`status-pill ${d.video_url ? 'ok' : 'pending'}`}>
+                            {d.video_url ? '영상 등록됨' : '영상 미등록'}
                           </span>
-                        ) : (
-                          <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#3FD6A622', color: '#3FD6A6' }}>
-                            🎓 클래스
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ color: 'var(--text-mid)' }}>{d.week}</td>
-                      <td>{d.title}</td>
-                      <td>
-                        <span className={`status-pill ${d.video_url ? 'ok' : 'pending'}`}>
-                          {d.video_url ? '영상 등록됨' : '영상 미등록'}
-                        </span>
-                      </td>
-                      <td style={{ textAlign: 'center' }}>
-                        <button className="btn-table" onClick={() => setEditingLecture(d)}>수정</button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td style={{ textAlign: 'center' }}>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
+                            <button
+                              className="btn-table"
+                              onClick={() => {
+                                setEditingLecture(d);
+                                setIsNewLecture(false);
+                              }}
+                            >
+                              수정
+                            </button>
+                            <button
+                              className="btn-table"
+                              style={{ backgroundColor: '#ff4d4d22', color: '#ff4d4d', border: '1px solid #ff4d4d44' }}
+                              onClick={() => handleDeleteLecture(d)}
+                            >
+                              삭제
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -549,7 +673,7 @@ export default function AdminPage() {
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h1>참여자 관리</h1>
-                <div className="sub">개인별 시작일 기준 현재 진행 Day와 만료(30일)를 관리합니다.</div>
+                <div className="sub">회원별 코스 기간(30일/100일)과 만료를 관리합니다.</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={handleApproveAll} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
@@ -567,6 +691,7 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th>이름 (닉네임)</th>
+                    <th style={{ width: '120px' }}>코스 기간</th>
                     <th>시작(승인)일</th>
                     <th>현재 진행</th>
                     <th>완주 달성일</th>
@@ -576,41 +701,63 @@ export default function AdminPage() {
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
                   ) : participants.length === 0 ? (
-                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
                   ) : (
-                    participants.map(p => (
-                      <tr key={p.id} onClick={() => setSelectedUser(p)} style={{ cursor: 'pointer' }}>
-                        <td>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <div className="avatar-circle">{p.name[0]}</div>
-                            <strong>{p.name}</strong>
-                          </div>
-                        </td>
-                        <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
-                        <td><strong>Day {p.currentDay} / 30</strong></td>
-                        <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
-                        <td>
-                          <span className={`status-pill ${p.status === 'approved' ? 'ok' : 'warn'}`}>
-                            {p.status === 'approved' ? (p.currentDay > 30 ? '30일만료' : '진행중') : '입금대기'}
-                          </span>
-                        </td>
-                        <td onClick={e => e.stopPropagation()}>
-                          <button
-                            className="btn-table"
-                            style={{
-                              backgroundColor: p.status === 'approved' ? '#262626' : '#3FD6A6',
-                              color: p.status === 'approved' ? '#888' : '#000',
-                              fontWeight: 600,
-                            }}
-                            onClick={() => toggleApproval(p)}
-                          >
-                            {p.status === 'approved' ? '승인 취소' : '✓ 승인하기'}
-                          </button>
-                        </td>
-                      </tr>
-                    ))
+                    participants.map(p => {
+                      const isExpired = p.status === 'approved' && p.currentDay > p.duration;
+                      return (
+                        <tr key={p.id} onClick={() => setSelectedUser(p)} style={{ cursor: 'pointer' }}>
+                          <td>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <div className="avatar-circle">{p.name[0]}</div>
+                              <strong>{p.name}</strong>
+                            </div>
+                          </td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <select
+                              value={p.duration}
+                              onChange={e => handleUpdateDuration(p.id, Number(e.target.value))}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: '6px',
+                                backgroundColor: '#222',
+                                color: p.duration === 100 ? '#FF5E3A' : '#3FD6A6',
+                                border: '1px solid #444',
+                                fontSize: '12px',
+                                fontWeight: 'bold',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              <option value={30}>30일 코스</option>
+                              <option value={100}>100일 코스</option>
+                            </select>
+                          </td>
+                          <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
+                          <td><strong>Day {p.currentDay} / {p.duration}</strong></td>
+                          <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
+                          <td>
+                            <span className={`status-pill ${p.status === 'approved' && !isExpired ? 'ok' : 'warn'}`}>
+                              {p.status === 'approved' ? (isExpired ? `${p.duration}일 만료` : '진행중') : '입금대기'}
+                            </span>
+                          </td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <button
+                              className="btn-table"
+                              style={{
+                                backgroundColor: p.status === 'approved' ? '#262626' : '#3FD6A6',
+                                color: p.status === 'approved' ? '#888' : '#000',
+                                fontWeight: 600,
+                              }}
+                              onClick={() => toggleApproval(p)}
+                            >
+                              {p.status === 'approved' ? '승인 취소' : '✓ 승인하기'}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
                   )}
                 </tbody>
               </table>
@@ -632,13 +779,52 @@ export default function AdminPage() {
             <div>
               <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedUser.name}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                {selectedUser.startDate} 승인 · <strong>Day {selectedUser.currentDay} 진행 중</strong>
+                {selectedUser.startDate} 승인 · <strong>Day {selectedUser.currentDay} / {selectedUser.duration}일 진행 중</strong>
               </div>
             </div>
           </div>
 
-          {/* 신체 정보 요약 표시 */}
-          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828', fontSize: '12px' }}>
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
+            <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>챌린지 코스 기간</div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                onClick={() => handleUpdateDuration(selectedUser.id, 30)}
+                style={{
+                  flex: 1,
+                  padding: '8px',
+                  borderRadius: '6px',
+                  border: selectedUser.duration === 30 ? '1px solid #3FD6A6' : '1px solid #333',
+                  backgroundColor: selectedUser.duration === 30 ? '#3FD6A615' : '#222',
+                  color: selectedUser.duration === 30 ? '#3FD6A6' : '#888',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                30일 코스
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUpdateDuration(selectedUser.id, 100)}
+                style={{
+                  flex: 1,
+                  padding: '8px',
+                  borderRadius: '6px',
+                  border: selectedUser.duration === 100 ? '1px solid #FF5E3A' : '1px solid #333',
+                  backgroundColor: selectedUser.duration === 100 ? '#FF5E3A15' : '#222',
+                  color: selectedUser.duration === 100 ? '#FF5E3A' : '#888',
+                  fontSize: '12px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                🔥 100일 코스
+              </button>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828', fontSize: '12px' }}>
             <div style={{ color: '#aaa', marginBottom: '4px' }}>신체 설정 정보</div>
             <div style={{ color: '#fff' }}>
               키: <strong>{selectedUser.height ? `${selectedUser.height} cm` : '미입력'}</strong> / 
@@ -646,7 +832,6 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* 버튼 1: 단순 승인 토글 */}
           <div style={{ marginTop: '20px' }}>
             <button
               className="btn-primary"
@@ -661,7 +846,6 @@ export default function AdminPage() {
             </button>
           </div>
 
-          {/* 버튼 2: 회원 영구 탈퇴 */}
           <div style={{ marginTop: '12px', borderTop: '1px solid #262626', paddingTop: '16px' }}>
             <button
               type="button"
@@ -676,14 +860,10 @@ export default function AdminPage() {
                 fontSize: '11.5px',
                 fontWeight: 600,
                 cursor: 'pointer',
-                transition: 'all 0.2s',
               }}
             >
               ⚠️ 회원 완전 탈퇴 (전체 데이터 영구 파기)
             </button>
-            <p style={{ fontSize: '10px', color: '#666', marginTop: '6px', textAlign: 'center', lineHeight: 1.4 }}>
-              탈퇴 요청 시 사용하며, 프로필 및 모든 체중/루틴 기록이 즉시 영구 삭제됩니다.
-            </p>
           </div>
         </div>
       )}
