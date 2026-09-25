@@ -17,7 +17,8 @@ const INITIAL_MISSIONS = [
 ];
 
 export default function Home() {
-  const [currentTab, setCurrentTab] = useState<'today' | 'class' | 'record'>('today');
+  // 4개 탭 지원: 'today' | 'class' | 'baekddakmi' | 'record'
+  const [currentTab, setCurrentTab] = useState<'today' | 'class' | 'baekddakmi' | 'record'>('today');
   const [missions, setMissions] = useState(INITIAL_MISSIONS);
   const [confettis, setConfettis] = useState<any[]>([]);
   const [showCelebration, setShowCelebration] = useState(false);
@@ -38,6 +39,7 @@ export default function Home() {
   const [lectures, setLectures] = useState<any[]>([]);
   const [userDay, setUserDay] = useState(1);
   const [selectedLecture, setSelectedLecture] = useState<any>(null);
+  const [selectedMotivation, setSelectedMotivation] = useState<any>(null);
 
   // 닉네임 수정 모달
   const [isEditingName, setIsEditingName] = useState(false);
@@ -75,7 +77,7 @@ export default function Home() {
     return toKSTDateString(new Date());
   };
 
-  // Day 계산 (한국 날짜 KST 기준 오차 없는 자정 기준 계산)
+  // Day 계산
   const calculateUserDay = (approvedAt: string | null) => {
     if (!approvedAt) return 1;
 
@@ -176,7 +178,11 @@ export default function Home() {
       const { data } = await supabase.from('lectures').select('*').order('day', { ascending: true });
       if (data && isMounted) {
         setLectures(data);
-        if (data.length > 0) setSelectedLecture(data[0]);
+        const firstHealth = data.find(l => !l.category || l.category === 'health');
+        if (firstHealth) setSelectedLecture(firstHealth);
+
+        const firstMotivation = data.find(l => l.category === 'motivation');
+        if (firstMotivation) setSelectedMotivation(firstMotivation);
       }
     };
 
@@ -407,7 +413,16 @@ export default function Home() {
   const wellbeingDone = wellbeingMissions.filter(m => m.done).length;
   const totalPercent = Math.round(((essentialDone + wellbeingDone) / missions.length) * 100);
 
-  const todayLecture = lectures.find(l => l.day === userDay) || {
+  // 강의 분류 필터링 (클래스 vs 백딱미)
+  const healthLectures = useMemo(() => {
+    return lectures.filter(l => !l.category || l.category === 'health');
+  }, [lectures]);
+
+  const motivationLectures = useMemo(() => {
+    return lectures.filter(l => l.category === 'motivation');
+  }, [lectures]);
+
+  const todayLecture = healthLectures.find(l => l.day === userDay) || {
     day: userDay,
     title: '의지력이 아닌 뇌를 속이는 1%의 기적',
     description: '"다이어트, 매번 의지력 부족으로 실패하셨나요? 여러분의 잘못이 아닙니다."',
@@ -435,7 +450,7 @@ export default function Home() {
       cnt => cnt >= INITIAL_MISSIONS.length
     ).length;
 
-    if (missions.every(m => m.done)) {
+    if (missions.length > 0 && missions.every(m => m.done)) {
       count += 1;
     }
 
@@ -516,7 +531,6 @@ export default function Home() {
             의지력이 아닌 뇌를 깨우는 1% 루틴<br />챌린지에 오신 것을 환영합니다.
           </p>
 
-          {/* [필수] 개인정보 수집 및 이용 동의 체크 라인 (클릭 시 팝업 오픈) */}
           <div 
             onClick={() => {
               if (!isAgreed) {
@@ -555,7 +569,6 @@ export default function Home() {
             </span>
           </div>
 
-          {/* 카카오 1초 로그인 버튼 (동의 시에만 활성화) */}
           <button
             type="button"
             onClick={handleKakaoLogin}
@@ -582,7 +595,6 @@ export default function Home() {
           </button>
         </div>
 
-        {/* 약관 전문 모달 팝업 */}
         {isModalOpen && (
           <div style={{
             position: 'fixed',
@@ -618,7 +630,6 @@ export default function Home() {
                 </button>
               </div>
 
-              {/* 스크롤 감지 영역 */}
               <div 
                 ref={scrollRef}
                 onScroll={handleScrollTerms}
@@ -669,7 +680,6 @@ export default function Home() {
                 </p>
               </div>
 
-              {/* 하단 제어 버튼 */}
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   type="button"
@@ -691,7 +701,7 @@ export default function Home() {
                   type="button"
                   disabled={!hasScrolledToBottom}
                   onClick={() => {
-                    setIsAgreed(true); // 자동 체크 처리!
+                    setIsAgreed(true);
                     setIsModalOpen(false);
                   }}
                   style={{
@@ -939,7 +949,7 @@ export default function Home() {
               <div className="lecture-hero" onClick={() => setCurrentTab('class')} style={{ cursor: 'pointer' }}>
                 <div className="daytag">DAY {todayLecture.day}</div>
                 <h3 className="ttl">{todayLecture.title}</h3>
-                <div className="sub">{todayLecture.description || '오늘의 강의를 시청하고 루틴을 시작해보세요!'}</div>
+                <div className="sub">{todayLecture.description || '오늘의 건강 강의를 시청하고 루틴을 시작해보세요!'}</div>
               </div>
 
               <div className="mission-card">
@@ -1005,13 +1015,13 @@ export default function Home() {
             </>
           )}
 
-          {/* 탭 2: 클래스 */}
+          {/* 탭 2: 클래스 (건강 강의) */}
           {currentTab === 'class' && (
             <div style={{ padding: '16px 0' }}>
               <div style={{ marginBottom: '18px' }}>
-                <h2 style={{ fontSize: '18px', fontWeight: 'bold' }}>🎓 클래스 보관함</h2>
+                <h2 style={{ fontSize: '18px', fontWeight: 'bold' }}>🎓 건강 클래스</h2>
                 <p style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '4px' }}>
-                  현재 <strong>Day {userDay}</strong>까지 오픈되었습니다. 지난 강의는 언제든 복습 가능합니다.
+                  현재 <strong>Day {userDay}</strong>까지 오픈되었습니다. 체계적인 건강 지식을 쌓아보세요.
                 </p>
               </div>
 
@@ -1041,66 +1051,178 @@ export default function Home() {
               )}
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                {lectures.map(lec => {
-                  const isUnlocked = lec.day <= userDay;
-                  return (
-                    <div
-                      key={lec.day}
-                      onClick={() => isUnlocked && setSelectedLecture(lec)}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '14px 16px',
-                        backgroundColor: isUnlocked ? '#181818' : '#111',
-                        borderRadius: '12px',
-                        border: isUnlocked ? '1px solid #2a2a2a' : '1px solid #1a1a1a',
-                        cursor: isUnlocked ? 'pointer' : 'not-allowed',
-                        opacity: isUnlocked ? 1 : 0.45,
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                        <div
-                          style={{
-                            width: '36px',
-                            height: '36px',
-                            borderRadius: '8px',
-                            backgroundColor: isUnlocked ? 'rgba(63, 214, 166, 0.15)' : '#222',
-                            color: isUnlocked ? '#3FD6A6' : '#666',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            fontWeight: 700,
-                            fontSize: '12px',
-                          }}
-                        >
-                          {lec.day}
-                        </div>
-                        <div>
-                          <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
-                            {lec.title}
+                {healthLectures.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '30px 10px', color: '#777', fontSize: '12px' }}>
+                    등록된 클래스 영상이 없습니다.
+                  </div>
+                ) : (
+                  healthLectures.map(lec => {
+                    const isUnlocked = lec.day <= userDay;
+                    return (
+                      <div
+                        key={lec.day}
+                        onClick={() => isUnlocked && setSelectedLecture(lec)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '14px 16px',
+                          backgroundColor: isUnlocked ? '#181818' : '#111',
+                          borderRadius: '12px',
+                          border: isUnlocked ? '1px solid #2a2a2a' : '1px solid #1a1a1a',
+                          cursor: isUnlocked ? 'pointer' : 'not-allowed',
+                          opacity: isUnlocked ? 1 : 0.45,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div
+                            style={{
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '8px',
+                              backgroundColor: isUnlocked ? 'rgba(63, 214, 166, 0.15)' : '#222',
+                              color: isUnlocked ? '#3FD6A6' : '#666',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '12px',
+                            }}
+                          >
+                            {lec.day}
                           </div>
-                          <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                            {lec.week}
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
+                              {lec.title}
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
+                              {lec.week}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      <div>
-                        {isUnlocked ? (
-                          <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>▶ 시청</span>
-                        ) : (
-                          <span style={{ fontSize: '12px' }}>🔒</span>
-                        )}
+                        <div>
+                          {isUnlocked ? (
+                            <span style={{ fontSize: '11px', color: '#3FD6A6', fontWeight: 600 }}>▶ 시청</span>
+                          ) : (
+                            <span style={{ fontSize: '12px' }}>🔒</span>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
           )}
 
-          {/* 탭 3: 나의 기록 */}
+          {/* 탭 3: 🔥 백딱미 (동기부여 영상) */}
+          {currentTab === 'baekddakmi' && (
+            <div style={{ padding: '16px 0' }}>
+              <div style={{ marginBottom: '18px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#FF5E3A', margin: 0 }}>🔥 백딱미</h2>
+                  <span style={{ fontSize: '11px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
+                    백일만 딱 미쳐라!
+                  </span>
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '6px' }}>
+                  지칠 때마다 꺼내보는 멘탈 관리 & 불꽃 동기부여 영상입니다.
+                </p>
+              </div>
+
+              {selectedMotivation && (
+                <div style={{ marginBottom: '20px', backgroundColor: '#161616', borderRadius: '16px', overflow: 'hidden', border: '1px solid #FF5E3A44' }}>
+                  {selectedMotivation.video_url ? (
+                    <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0 }}>
+                      <iframe
+                        src={getEmbedUrl(selectedMotivation.video_url)}
+                        title={selectedMotivation.title}
+                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none' }}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                      />
+                    </div>
+                  ) : (
+                    <div style={{ padding: '40px 20px', textAlign: 'center', color: '#888', fontSize: '13px' }}>
+                      🔥 영상 준비 중입니다.
+                    </div>
+                  )}
+                  <div style={{ padding: '16px' }}>
+                    <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>DAY {selectedMotivation.day} 백딱미</span>
+                    <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px', color: '#fff' }}>{selectedMotivation.title}</h3>
+                    <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedMotivation.description}</p>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                {motivationLectures.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 10px', color: '#777', fontSize: '12px' }}>
+                    등록된 백딱미 영상이 없습니다.<br />관리자 페이지에서 백딱미 영상을 등록해 보세요!
+                  </div>
+                ) : (
+                  motivationLectures.map(lec => {
+                    const isUnlocked = lec.day <= userDay;
+                    return (
+                      <div
+                        key={lec.day}
+                        onClick={() => isUnlocked && setSelectedMotivation(lec)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '14px 16px',
+                          backgroundColor: isUnlocked ? '#181818' : '#111',
+                          borderRadius: '12px',
+                          border: isUnlocked ? '1px solid #332222' : '1px solid #1a1a1a',
+                          cursor: isUnlocked ? 'pointer' : 'not-allowed',
+                          opacity: isUnlocked ? 1 : 0.45,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                          <div
+                            style={{
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '8px',
+                              backgroundColor: isUnlocked ? 'rgba(255, 94, 58, 0.18)' : '#222',
+                              color: isUnlocked ? '#FF5E3A' : '#666',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              fontWeight: 700,
+                              fontSize: '12px',
+                            }}
+                          >
+                            {lec.day}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: 600, color: isUnlocked ? '#fff' : '#888' }}>
+                              {lec.title}
+                            </div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
+                              {lec.week}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div>
+                          {isUnlocked ? (
+                            <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>🔥 시청</span>
+                          ) : (
+                            <span style={{ fontSize: '12px' }}>🔒</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 탭 4: 나의 기록 */}
           {currentTab === 'record' && (
             <div style={{ padding: '16px 0' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px' }}>
@@ -1425,17 +1547,49 @@ export default function Home() {
           )}
         </div>
 
-        {/* 탭바 */}
-        <nav className="tabbar" style={{ left: 0, right: 0, width: '100%', boxSizing: 'border-box' }}>
-          <button type="button" onClick={() => setCurrentTab('today')} className={`tab-item ${currentTab === 'today' ? 'active' : ''}`}>
+        {/* 4개 탭 네비게이션 바 (투데이 / 클래스 / 🔥 백딱미 / 나의 기록) */}
+        <nav
+          className="tabbar"
+          style={{
+            left: 0,
+            right: 0,
+            width: '100%',
+            boxSizing: 'border-box',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setCurrentTab('today')}
+            className={`tab-item ${currentTab === 'today' ? 'active' : ''}`}
+          >
             <span className="ic">📅</span>
             <span>투데이</span>
           </button>
-          <button type="button" onClick={() => setCurrentTab('class')} className={`tab-item ${currentTab === 'class' ? 'active' : ''}`}>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('class')}
+            className={`tab-item ${currentTab === 'class' ? 'active' : ''}`}
+          >
             <span className="ic">🎓</span>
             <span>클래스</span>
           </button>
-          <button type="button" onClick={() => setCurrentTab('record')} className={`tab-item ${currentTab === 'record' ? 'active' : ''}`}>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('baekddakmi')}
+            className={`tab-item ${currentTab === 'baekddakmi' ? 'active' : ''}`}
+          >
+            <span className="ic">🔥</span>
+            <span style={{ color: currentTab === 'baekddakmi' ? '#FF5E3A' : undefined, fontWeight: currentTab === 'baekddakmi' ? 700 : undefined }}>
+              백딱미
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setCurrentTab('record')}
+            className={`tab-item ${currentTab === 'record' ? 'active' : ''}`}
+          >
             <span className="ic">📊</span>
             <span>나의 기록</span>
           </button>

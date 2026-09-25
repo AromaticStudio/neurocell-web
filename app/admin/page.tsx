@@ -42,7 +42,7 @@ export default function AdminPage() {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // 강의 수정 모달 상태
+  // 강의 수정 모달 상태 (category 필드 지원)
   const [editingLecture, setEditingLecture] = useState<any>(null);
   const [isSavingLecture, setIsSavingLecture] = useState(false);
 
@@ -139,7 +139,6 @@ export default function AdminPage() {
     };
 
     try {
-      // 1) 프로필 상태 업데이트
       const { error: pError } = await supabase
         .from('profiles')
         .update(updateData)
@@ -147,7 +146,6 @@ export default function AdminPage() {
 
       if (pError) throw pError;
 
-      // 2) 승인 취소인 경우 미션 로그만 삭제 (체중 기록 weight_records는 그대로 유지!)
       if (isCancelling) {
         await supabase
           .from('mission_logs')
@@ -187,11 +185,8 @@ export default function AdminPage() {
     }
 
     try {
-      // 1) 미션 로그 삭제
       await supabase.from('mission_logs').delete().eq('user_id', user.id);
-      // 2) 체중 기록 삭제
       await supabase.from('weight_records').delete().eq('user_id', user.id);
-      // 3) 프로필 삭제
       const { error: profError } = await supabase.from('profiles').delete().eq('id', user.id);
 
       if (profError) throw profError;
@@ -234,7 +229,7 @@ export default function AdminPage() {
     }
   };
 
-  // 기수 종료: 전체 일괄 취소 (승인된 회원의 미션 로그 일괄 정리)
+  // 기수 종료: 전체 일괄 취소
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -251,7 +246,6 @@ export default function AdminPage() {
     try {
       const approvedIds = approvedUsers.map(p => p.id);
 
-      // 프로필 비승인 전환
       const { error } = await supabase
         .from('profiles')
         .update({ status: 'pending', approved_at: null })
@@ -259,7 +253,6 @@ export default function AdminPage() {
 
       if (error) throw error;
 
-      // 미션 로그만 일괄 삭제
       await supabase
         .from('mission_logs')
         .delete()
@@ -272,7 +265,7 @@ export default function AdminPage() {
     }
   };
 
-  // 강의 내용 저장
+  // 강의 내용 저장 (카테고리: health / motivation 지원)
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -287,6 +280,7 @@ export default function AdminPage() {
           title: editingLecture.title,
           video_url: editingLecture.video_url,
           description: editingLecture.description,
+          category: editingLecture.category || 'health',
         });
 
       if (error) {
@@ -333,12 +327,40 @@ export default function AdminPage() {
       {/* 강의 수정 모달 */}
       {editingLecture && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
-          <form onSubmit={handleSaveLecture} style={{ width: '100%', maxWidth: '440px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box' }}>
+          <form onSubmit={handleSaveLecture} style={{ width: '100%', maxWidth: '460px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: '#fff' }}>
-              Day {editingLecture.day} 강의 설정
+              Day {editingLecture.day} 영상 설정
             </h3>
             
-            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>강의 제목</label>
+            {/* 카테고리 선택 */}
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>영상 분류</label>
+            <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
+              <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: (!editingLecture.category || editingLecture.category === 'health') ? '1px solid #3FD6A6' : '1px solid #333', backgroundColor: (!editingLecture.category || editingLecture.category === 'health') ? '#3FD6A615' : '#222', cursor: 'pointer', fontSize: '13px', color: '#fff' }}>
+                <input
+                  type="radio"
+                  name="cat"
+                  value="health"
+                  checked={!editingLecture.category || editingLecture.category === 'health'}
+                  onChange={() => setEditingLecture({ ...editingLecture, category: 'health' })}
+                  style={{ display: 'none' }}
+                />
+                🎓 건강 클래스
+              </label>
+
+              <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: editingLecture.category === 'motivation' ? '1px solid #FF5E3A' : '1px solid #333', backgroundColor: editingLecture.category === 'motivation' ? '#FF5E3A15' : '#222', cursor: 'pointer', fontSize: '13px', color: editingLecture.category === 'motivation' ? '#FF5E3A' : '#fff', fontWeight: 'bold' }}>
+                <input
+                  type="radio"
+                  name="cat"
+                  value="motivation"
+                  checked={editingLecture.category === 'motivation'}
+                  onChange={() => setEditingLecture({ ...editingLecture, category: 'motivation' })}
+                  style={{ display: 'none' }}
+                />
+                🔥 백딱미 (동기부여)
+              </label>
+            </div>
+
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>영상 제목</label>
             <input
               type="text"
               value={editingLecture.title || ''}
@@ -471,7 +493,7 @@ export default function AdminPage() {
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">Day별 유튜브 영상과 강의 자료를 등록·수정합니다. (참여자 Day에 맞춰 누적 오픈됩니다)</div>
+                <div className="sub">Day별 클래스 및 백딱미 영상을 등록·수정합니다. (카테고리별로 자동 분류됩니다)</div>
               </div>
               <button onClick={fetchLectures} className="btn-table">🔄 새로고침</button>
             </div>
@@ -480,17 +502,29 @@ export default function AdminPage() {
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '80px' }}>Day</th>
-                    <th style={{ width: '130px' }}>주차</th>
-                    <th>강의 제목</th>
-                    <th style={{ width: '120px' }}>영상 상태</th>
-                    <th style={{ width: '100px', textAlign: 'center' }}>관리</th>
+                    <th style={{ width: '70px' }}>Day</th>
+                    <th style={{ width: '120px' }}>분류</th>
+                    <th style={{ width: '110px' }}>주차</th>
+                    <th>강의/영상 제목</th>
+                    <th style={{ width: '110px' }}>영상 상태</th>
+                    <th style={{ width: '90px', textAlign: 'center' }}>관리</th>
                   </tr>
                 </thead>
                 <tbody>
                   {dayList.map(d => (
                     <tr key={d.day}>
                       <td><strong>Day {d.day}</strong></td>
+                      <td>
+                        {d.category === 'motivation' ? (
+                          <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', fontWeight: 'bold' }}>
+                            🔥 백딱미
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#3FD6A622', color: '#3FD6A6' }}>
+                            🎓 클래스
+                          </span>
+                        )}
+                      </td>
                       <td style={{ color: 'var(--text-mid)' }}>{d.week}</td>
                       <td>{d.title}</td>
                       <td>
@@ -612,7 +646,7 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* 버튼 1: 단순 승인 토글 (미션 로그만 초기화, 신체 기록 유지) */}
+          {/* 버튼 1: 단순 승인 토글 */}
           <div style={{ marginTop: '20px' }}>
             <button
               className="btn-primary"
@@ -627,7 +661,7 @@ export default function AdminPage() {
             </button>
           </div>
 
-          {/* 버튼 2: 회원 영구 탈퇴 및 데이터 영구 파기 */}
+          {/* 버튼 2: 회원 영구 탈퇴 */}
           <div style={{ marginTop: '12px', borderTop: '1px solid #262626', paddingTop: '16px' }}>
             <button
               type="button"
