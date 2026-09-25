@@ -1120,14 +1120,14 @@ export default function Home() {
             </div>
           )}
 
-          {/* 탭 3: 🔥 백딱미 */}
+          {/* 탭 3: 🔥 딱백미 */}
           {currentTab === 'baekddakmi' && (
             <div style={{ padding: '16px 0' }}>
               <div style={{ marginBottom: '18px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#FF5E3A', margin: 0 }}>🔥 백딱미</h2>
+                  <h2 style={{ fontSize: '18px', fontWeight: 'bold', color: '#FF5E3A', margin: 0 }}>🔥 딱백미</h2>
                   <span style={{ fontSize: '11px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', padding: '2px 8px', borderRadius: '10px', fontWeight: 'bold' }}>
-                    백일만 딱 미쳐라!
+                    딱 백일만 미쳐라!
                   </span>
                 </div>
                 <p style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '6px' }}>
@@ -1138,7 +1138,7 @@ export default function Home() {
               {motivationLectures.length === 0 ? (
                 <div style={{ textAlign: 'center', padding: '50px 20px', backgroundColor: '#141414', borderRadius: '16px', border: '1px solid #222', color: '#777' }}>
                   <div style={{ fontSize: '32px', marginBottom: '8px' }}>🔥</div>
-                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#FF5E3A' }}>등록된 백딱미 영상이 없습니다.</div>
+                  <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#FF5E3A' }}>등록된 딱백미 영상이 없습니다.</div>
                   <div style={{ fontSize: '12px', marginTop: '4px' }}>관리자가 동기부여 영상을 등록하면 이곳에 자동으로 표시됩니다.</div>
                 </div>
               ) : (
@@ -1161,7 +1161,7 @@ export default function Home() {
                         </div>
                       )}
                       <div style={{ padding: '16px' }}>
-                        <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>DAY {selectedMotivation.day} 백딱미</span>
+                        <span style={{ fontSize: '11px', color: '#FF5E3A', fontWeight: 600 }}>DAY {selectedMotivation.day} 딱백미</span>
                         <h3 style={{ fontSize: '15px', fontWeight: 'bold', margin: '4px 0 6px', color: '#fff' }}>{selectedMotivation.title}</h3>
                         <p style={{ fontSize: '12px', color: '#aaa', margin: 0, lineHeight: 1.5 }}>{selectedMotivation.description}</p>
                       </div>
@@ -1590,7 +1590,7 @@ export default function Home() {
           >
             <span className="ic">🔥</span>
             <span style={{ color: currentTab === 'baekddakmi' ? '#FF5E3A' : undefined, fontWeight: currentTab === 'baekddakmi' ? 700 : undefined }}>
-              백딱미
+              딱백미
             </span>
           </button>
           <button

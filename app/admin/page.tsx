@@ -505,7 +505,7 @@ export default function AdminPage() {
                   onChange={() => setEditingLecture({ ...editingLecture, category: 'motivation' })}
                   style={{ display: 'none' }}
                 />
-                🔥 백딱미 (동기부여)
+                🔥 딱백미 (동기부여)
               </label>
             </div>
 
@@ -578,7 +578,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* 사이드바 (하단 김코치 프로필 배지 제거 완료) */}
+      {/* 사이드바 */}
       <aside className="admin-sidebar">
         <div className="brand-box">
           <div className="brand-l1">Neuro <span>Cell</span>_Fit</div>
@@ -757,7 +757,7 @@ export default function AdminPage() {
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">클래스 및 백딱미 영상을 직접 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
+                <div className="sub">클래스 및 딱백미 영상을 직접 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={handleOpenNewLectureModal} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
@@ -789,7 +789,7 @@ export default function AdminPage() {
                         <td>
                           {d.category === 'motivation' ? (
                             <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', fontWeight: 'bold' }}>
-                              🔥 백딱미
+                              🔥 딱백미
                             </span>
                           ) : (
                             <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#3FD6A622', color: '#3FD6A6' }}>
