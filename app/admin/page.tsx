@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../lib/supabase';
 
 const ADMIN_PASSWORD = 'coach1234';
@@ -38,6 +38,7 @@ export default function AdminPage() {
   const [inputPw, setInputPw] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants'>('dashboard');
   const [participants, setParticipants] = useState<any[]>([]);
+  const [rawMissionLogs, setRawMissionLogs] = useState<any[]>([]);
   const [dayList, setDayList] = useState<any[]>([]);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -53,7 +54,7 @@ export default function AdminPage() {
     if (data) setDayList(data);
   };
 
-  // 회원 목록 불러오기
+  // 회원 목록 및 로그 불러오기
   const fetchParticipants = async () => {
     setLoading(true);
     try {
@@ -63,6 +64,10 @@ export default function AdminPage() {
       ]);
 
       if (!pError && profilesData) {
+        if (missionLogsData) {
+          setRawMissionLogs(missionLogsData);
+        }
+
         const userCompleteDaysMap: { [userId: string]: number } = {};
         if (missionLogsData) {
           const userDateCounts: { [userId: string]: { [date: string]: number } } = {};
@@ -120,7 +125,7 @@ export default function AdminPage() {
     }
   };
 
-  // 회원별 챌린지 코스 기간 변경
+  // 회원별 코스 기간 변경
   const handleUpdateDuration = async (userId: string, newDuration: number) => {
     try {
       const { error } = await supabase
@@ -141,7 +146,7 @@ export default function AdminPage() {
     }
   };
 
-  // 승인 / 승인 취소
+  // 승인 / 승인 취소 토글
   const toggleApproval = async (user: any) => {
     const isCancelling = user.status === 'approved';
 
@@ -222,7 +227,7 @@ export default function AdminPage() {
     }
   };
 
-  // 대기자 전체 승인
+  // 대기자 일괄 승인
   const handleApproveAll = async () => {
     const pendingUsers = participants.filter(p => p.status !== 'approved');
     if (pendingUsers.length === 0) {
@@ -252,7 +257,7 @@ export default function AdminPage() {
     }
   };
 
-  // 전체 일괄 기수 종료
+  // 전체 기수 일괄 종료
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -302,7 +307,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // 강의 내용 저장 (신규 등록 및 기존 수정 겸용)
+  // 강의 내용 저장
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -360,6 +365,43 @@ export default function AdminPage() {
     }
   };
 
+  // 🔔 3일 이상 미인증 회원만 탐지하는 로직
+  const inactiveAlerts = useMemo(() => {
+    const todayStr = toKSTDateString(new Date());
+    const [tY, tM, tD] = todayStr.split('-').map(Number);
+    const todayUtc = Date.UTC(tY, tM - 1, tD);
+
+    const inactiveList: any[] = [];
+    const approvedMembers = participants.filter(p => p.status === 'approved' && p.currentDay <= p.duration);
+
+    approvedMembers.forEach(member => {
+      const userLogs = rawMissionLogs.filter(l => l.user_id === member.id && l.completed);
+
+      let lastActiveDateStr = member.startDate !== '-' ? member.startDate : null;
+      if (userLogs.length > 0) {
+        const sortedDates = userLogs.map(l => l.log_date).sort();
+        lastActiveDateStr = sortedDates[sortedDates.length - 1];
+      }
+
+      if (lastActiveDateStr) {
+        const [lY, lM, lD] = lastActiveDateStr.split('-').map(Number);
+        const lastUtc = Date.UTC(lY, lM - 1, lD);
+        const diffDays = Math.floor((todayUtc - lastUtc) / (1000 * 60 * 60 * 24));
+
+        if (diffDays >= 3) {
+          inactiveList.push({
+            ...member,
+            inactiveDays: diffDays,
+            lastDate: lastActiveDateStr,
+          });
+        }
+      }
+    });
+
+    inactiveList.sort((a, b) => b.inactiveDays - a.inactiveDays);
+    return inactiveList;
+  }, [participants, rawMissionLogs]);
+
   if (!isAuthenticated) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -395,7 +437,6 @@ export default function AdminPage() {
               {isNewLecture ? '➕ 새 영상 등록' : `Day ${editingLecture.day} 영상 수정`}
             </h3>
             
-            {/* 영상 분류 (건강 클래스 vs 백딱미) */}
             <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>영상 분류</label>
             <div style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
               <label style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', padding: '10px', borderRadius: '8px', border: (!editingLecture.category || editingLecture.category === 'health') ? '1px solid #3FD6A6' : '1px solid #333', backgroundColor: (!editingLecture.category || editingLecture.category === 'health') ? '#3FD6A615' : '#222', cursor: 'pointer', fontSize: '13px', color: '#fff' }}>
@@ -423,7 +464,6 @@ export default function AdminPage() {
               </label>
             </div>
 
-            {/* Day 및 주차 번호 직접 입력 */}
             <div style={{ display: 'flex', gap: '10px', marginBottom: '12px' }}>
               <div style={{ flex: 1 }}>
                 <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>오픈 Day (1~100)</label>
@@ -554,6 +594,7 @@ export default function AdminPage() {
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
+              {/* 좌측: 입금 승인 대기 명단 */}
               <div className="panel-box">
                 <h3>⚠️ 입금 승인 대기 명단</h3>
                 {pendingCount === 0 ? (
@@ -573,12 +614,52 @@ export default function AdminPage() {
                 )}
               </div>
 
+              {/* 우측: 🔔 3일 이상 미활동 집중 케어 알림 */}
               <div className="panel-box">
-                <h3>최근 인증 활동</h3>
-                <div className="feed-item">
-                  <div className="dot"></div>
-                  <div style={{ fontSize: '12.5px' }}><strong>회원 시스템</strong>이 정상 가동 중입니다.</div>
-                  <span className="time-lbl">실시간</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h3 style={{ margin: 0 }}>🔔 미인증 집중 케어 알림</h3>
+                  <span style={{ fontSize: '11px', color: '#888' }}>3일 이상 미체크</span>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  {inactiveAlerts.length > 0 ? (
+                    inactiveAlerts.map(m => (
+                      <div
+                        key={m.id}
+                        onClick={() => setSelectedUser(m)}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '12px 14px',
+                          backgroundColor: '#241818',
+                          borderRadius: '10px',
+                          border: '1px solid #ff4d4d33',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <span style={{ fontSize: '15px' }}>⚠️</span>
+                          <div>
+                            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#ff6b6b' }}>
+                              {m.name}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#aaa', marginTop: '2px' }}>
+                              최근 <strong>{m.inactiveDays}일간</strong> 미션 미인증 (마지막 활동: {m.lastDate})
+                            </div>
+                          </div>
+                        </div>
+                        <span style={{ fontSize: '11px', color: '#ff8888', backgroundColor: '#ff4d4d22', padding: '3px 8px', borderRadius: '6px', fontWeight: 600 }}>
+                          연락 요망
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <div style={{ padding: '32px 12px', textAlign: 'center', color: '#888', fontSize: '12.5px', lineHeight: 1.6 }}>
+                      ✨ 현재 3일 이상 미인증된 회원이 없습니다.<br />
+                      모든 참여자가 성실하게 루틴을 이어가고 있습니다!
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
