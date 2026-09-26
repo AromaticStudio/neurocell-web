@@ -33,6 +33,19 @@ const calculateAdminUserDay = (approvedAt: string | null) => {
   return Math.max(1, diffDays + 1);
 };
 
+// BMI 계산 및 상태 분류 함수
+const calculateBMI = (weightKg: number | null, heightCm: number | null) => {
+  if (!weightKg || !heightCm || heightCm <= 0) return { bmi: null, label: '-', color: '#888' };
+  const hM = heightCm / 100;
+  const bmiVal = Number((weightKg / (hM * hM)).toFixed(1));
+
+  if (bmiVal < 18.5) return { bmi: bmiVal, label: '저체중', color: '#5AC8FA' };
+  if (bmiVal < 23) return { bmi: bmiVal, label: '정상', color: '#3FD6A6' };
+  if (bmiVal < 25) return { bmi: bmiVal, label: '과체중', color: '#FFCC00' };
+  if (bmiVal < 30) return { bmi: bmiVal, label: '비만', color: '#FF9500' };
+  return { bmi: bmiVal, label: '고도비만', color: '#FF3B30' };
+};
+
 export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [inputPw, setInputPw] = useState('');
@@ -43,11 +56,12 @@ export default function AdminPage() {
   
   const [participants, setParticipants] = useState<any[]>([]);
   const [rawMissionLogs, setRawMissionLogs] = useState<any[]>([]);
+  const [userWeightMap, setUserWeightMap] = useState<{ [userId: string]: any[] }>({});
   const [dayList, setDayList] = useState<any[]>([]);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
 
-  // 재승인 모달 상태 (실수 복구 vs 새로 시작 선택용)
+  // 재승인 모달 상태
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
@@ -108,13 +122,18 @@ export default function AdminPage() {
     }
   };
 
-  // 회원 목록 및 로그 불러오기
+  // 회원 목록, 미션 로그, 체중 기록 동시 불러오기
   const fetchParticipants = async () => {
     setLoading(true);
     try {
-      const [{ data: profilesData, error: pError }, { data: missionLogsData }] = await Promise.all([
+      const [
+        { data: profilesData, error: pError },
+        { data: missionLogsData },
+        { data: weightsData },
+      ] = await Promise.all([
         supabase.from('profiles').select('*').order('created_at', { ascending: false }),
         supabase.from('mission_logs').select('user_id, log_date, completed').eq('completed', true),
+        supabase.from('weight_records').select('*').order('record_date', { ascending: true }),
       ]);
 
       if (pError) throw pError;
@@ -122,6 +141,16 @@ export default function AdminPage() {
       if (profilesData) {
         if (missionLogsData) {
           setRawMissionLogs(missionLogsData);
+        }
+
+        // 유저별 체중 기록 맵 구축
+        const wMap: { [userId: string]: any[] } = {};
+        if (weightsData) {
+          weightsData.forEach(w => {
+            if (!wMap[w.user_id]) wMap[w.user_id] = [];
+            wMap[w.user_id].push(w);
+          });
+          setUserWeightMap(wMap);
         }
 
         const userCompleteDaysMap: { [userId: string]: number } = {};
@@ -143,6 +172,22 @@ export default function AdminPage() {
           const realCompletedDays = userCompleteDaysMap[p.id] || 0;
           const duration = p.challenge_duration || 30;
 
+          // 체중 지표 계산
+          const userLogs = wMap[p.id] || [];
+          const initialWeight = userLogs.length > 0 ? Number(userLogs[0].weight) : (p.initial_weight ? Number(p.initial_weight) : null);
+          const latestWeight = userLogs.length > 0 ? Number(userLogs[userLogs.length - 1].weight) : initialWeight;
+          const targetWeight = p.target_weight ? Number(p.target_weight) : null;
+          const height = p.height ? Number(p.height) : null;
+
+          // 총 감량 수치 (시작 체중 - 최신 체중)
+          let weightDiff: number | null = null;
+          if (initialWeight !== null && latestWeight !== null) {
+            weightDiff = Number((latestWeight - initialWeight).toFixed(1));
+          }
+
+          // BMI 계산
+          const bmiInfo = calculateBMI(latestWeight, height);
+
           return {
             id: p.id,
             name: p.nickname || `참여자 ${idx + 1}`,
@@ -153,8 +198,13 @@ export default function AdminPage() {
             duration,
             rawApprovedAt: p.approved_at,
             createdAt: p.created_at,
-            height: p.height,
-            target_weight: p.target_weight,
+            height,
+            target_weight: targetWeight,
+            initial_weight: initialWeight,
+            latest_weight: latestWeight,
+            weight_diff: weightDiff,
+            bmi_info: bmiInfo,
+            weight_history: userLogs,
           };
         });
         setParticipants(mapped);
@@ -210,9 +260,8 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [개별 승인 취소/승인 핸들러: 취소 시 날짜와 로그 절대 보존]
+  // 승인 취소 / 승인 핸들러 (날짜 완벽 보존)
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 전환, 데이터 무손상)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
@@ -224,7 +273,7 @@ export default function AdminPage() {
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' }) // 👈 approved_at 날짜는 그대로 둠!
+          .update({ status: 'pending' })
           .eq('id', user.id);
 
         if (error) throw error;
@@ -238,17 +287,14 @@ export default function AdminPage() {
       return;
     }
 
-    // 2. 대기 상태인 회원 ➔ 승인하기
-    // 이전에 시작일 이력이 있는 경우 선택 팝업 오픈
     if (user.rawApprovedAt) {
       setReapprovingUser(user);
     } else {
-      // 순수 신규 회원: 오늘 날짜로 승인
       await executeDirectApprove(user.id);
     }
   };
 
-  // ⭐️ [재승인 실행 함수: 'resume' 시 approved_at 날짜를 절대 건드리지 않음!]
+  // 재승인 실행 함수 (기존 시작일 손대지 않고 상태만 변경)
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
@@ -256,7 +302,6 @@ export default function AdminPage() {
 
     try {
       if (mode === 'resume') {
-        // ⭐️ 핵심: DB에 저장된 날짜를 절대로 덮어쓰지 않고 status만 'approved'로 변경!
         const { error } = await supabase
           .from('profiles')
           .update({ status: 'approved' })
@@ -266,7 +311,6 @@ export default function AdminPage() {
 
         alert(`'${user.name}' 회원의 기존 진행(Day ${user.currentDay})이 안전하게 복구되었습니다!`);
       } else {
-        // [새로운 기수로 시작]: 오늘부터 Day 1로 설정하고 이전 미션 로그 삭제
         const todayIso = new Date().toISOString();
         const { error: pError } = await supabase
           .from('profiles')
@@ -411,7 +455,7 @@ export default function AdminPage() {
     }
   };
 
-  // 신규 영상 등록 모달 열기
+  // 영상 관련 핸들러들
   const handleOpenNewLectureModal = () => {
     const targetList = dayList.filter(d => (d.category || 'health') === contentSubTab);
     const nextDay = targetList.length > 0 ? Math.max(...targetList.map(d => d.day)) + 1 : 1;
@@ -427,7 +471,6 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // 영상 저장
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -487,7 +530,6 @@ export default function AdminPage() {
     }
   };
 
-  // 강의 삭제
   const handleDeleteLecture = async (lecture: any) => {
     if (!confirm(`[Day ${lecture.day}] '${lecture.title}' 영상을 정말 삭제하시겠습니까?`)) {
       return;
@@ -548,7 +590,6 @@ export default function AdminPage() {
     return inactiveList;
   }, [participants, rawMissionLogs]);
 
-  // 콘텐츠 서브 탭 필터링 목록
   const filteredLectures = useMemo(() => {
     return dayList.filter(d => {
       const cat = d.category || 'health';
@@ -583,7 +624,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* ⭐️ 재승인 선택 모달 */}
+      {/* 재승인 선택 모달 */}
       {reapprovingUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
@@ -775,7 +816,7 @@ export default function AdminPage() {
             <span className="ic">🎬</span>콘텐츠 관리
           </button>
           <button className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`} onClick={() => setActiveTab('participants')}>
-            <span className="ic">👥</span>참여자 관리
+            <span className="ic">👥</span>참여자 관리 (체중 모니터링)
           </button>
         </nav>
       </aside>
@@ -811,7 +852,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 노트 편집 패널 */}
+            {/* 코치 노트 패널 */}
             <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
@@ -862,7 +903,7 @@ export default function AdminPage() {
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
-              {/* 좌측: 입금 승인 대기 명단 */}
+              {/* 입금 승인 대기 명단 */}
               <div className="panel-box">
                 <h3>⚠️ 입금 승인 대기 명단</h3>
                 {pendingCount === 0 ? (
@@ -882,7 +923,7 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* 우측: 🔔 3일 이상 미활동 집중 케어 알림 */}
+              {/* 미인증 집중 케어 알림 */}
               <div className="panel-box">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h3 style={{ margin: 0 }}>🔔 미인증 집중 케어 알림</h3>
@@ -940,7 +981,7 @@ export default function AdminPage() {
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">클래스와 딱백미 영상을 분리하여 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
+                <div className="sub">클래스와 딱백미 영상을 분리하여 등록·관리합니다.</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button
@@ -958,7 +999,6 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 상단 서브 탭 */}
             <div style={{ display: 'flex', gap: '8px', margin: '20px 0 16px' }}>
               <button
                 type="button"
@@ -1017,9 +1057,7 @@ export default function AdminPage() {
                   {filteredLectures.length === 0 ? (
                     <tr>
                       <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#777' }}>
-                        {contentSubTab === 'motivation'
-                          ? '등록된 딱백미 영상이 없습니다. 우측 상단의 [+ 새 딱백미 영상 등록]을 눌러보세요.'
-                          : '등록된 건강 클래스 영상이 없습니다. 우측 상단의 [+ 새 클래스 영상 등록]을 눌러보세요.'}
+                        등록된 영상이 없습니다.
                       </td>
                     </tr>
                   ) : (
@@ -1050,14 +1088,7 @@ export default function AdminPage() {
                               href={d.video_url}
                               target="_blank"
                               rel="noopener noreferrer"
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: '4px',
-                                fontSize: '12px',
-                                color: '#3FD6A6',
-                                textDecoration: 'underline',
-                              }}
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#3FD6A6', textDecoration: 'underline' }}
                             >
                               ▶ 영상 바로보기
                             </a>
@@ -1067,22 +1098,8 @@ export default function AdminPage() {
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
-                            <button
-                              className="btn-table"
-                              onClick={() => {
-                                setEditingLecture(d);
-                                setIsNewLecture(false);
-                              }}
-                            >
-                              수정
-                            </button>
-                            <button
-                              className="btn-table"
-                              style={{ backgroundColor: '#ff4d4d22', color: '#ff4d4d', border: '1px solid #ff4d4d44' }}
-                              onClick={() => handleDeleteLecture(d)}
-                            >
-                              삭제
-                            </button>
+                            <button className="btn-table" onClick={() => { setEditingLecture(d); setIsNewLecture(false); }}>수정</button>
+                            <button className="btn-table" style={{ backgroundColor: '#ff4d4d22', color: '#ff4d4d', border: '1px solid #ff4d4d44' }} onClick={() => handleDeleteLecture(d)}>삭제</button>
                           </div>
                         </td>
                       </tr>
@@ -1094,13 +1111,13 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 참여자 관리 */}
+        {/* 참여자 관리 (체중 모니터링 포함) */}
         {activeTab === 'participants' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
-                <h1>참여자 관리</h1>
-                <div className="sub">회원별 코스 기간(30일/100일)과 만료를 관리합니다.</div>
+                <h1>참여자 관리 & 체중 모니터링</h1>
+                <div className="sub">참여자의 루틴 달성 현황 및 체중·BMI 감량 추이를 종합 관리합니다.</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={handleApproveAll} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
@@ -1118,19 +1135,22 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th>이름 (닉네임)</th>
-                    <th style={{ width: '120px' }}>코스 기간</th>
-                    <th>시작(승인)일</th>
-                    <th>현재 진행</th>
-                    <th>완주 달성일</th>
+                    <th style={{ width: '110px' }}>코스 기간</th>
+                    <th>진행 일차</th>
+                    <th>완주 달성</th>
+                    {/* ⭐️ 체중 모니터링 컬럼들 */}
+                    <th>현재 체중 (감량)</th>
+                    <th>BMI 상태</th>
+                    <th>목표 체중</th>
                     <th>상태</th>
                     <th>승인 관리</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
+                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
                   ) : participants.length === 0 ? (
-                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
+                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
                   ) : (
                     participants.map(p => {
                       const isExpired = p.status === 'approved' && p.currentDay > p.duration;
@@ -1139,7 +1159,10 @@ export default function AdminPage() {
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               <div className="avatar-circle">{p.name[0]}</div>
-                              <strong>{p.name}</strong>
+                              <div>
+                                <strong>{p.name}</strong>
+                                <div style={{ fontSize: '10px', color: '#777' }}>시작: {p.startDate}</div>
+                              </div>
                             </div>
                           </td>
                           <td onClick={e => e.stopPropagation()}>
@@ -1161,9 +1184,54 @@ export default function AdminPage() {
                               <option value={100}>100일 코스</option>
                             </select>
                           </td>
-                          <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
                           <td><strong>Day {p.currentDay} / {p.duration}</strong></td>
                           <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
+
+                          {/* 체중 요약 */}
+                          <td>
+                            {p.latest_weight ? (
+                              <div>
+                                <span style={{ fontWeight: 700, fontSize: '13px' }}>{p.latest_weight} kg</span>
+                                {p.weight_diff !== null && (
+                                  <span style={{
+                                    fontSize: '11px',
+                                    marginLeft: '6px',
+                                    fontWeight: 'bold',
+                                    color: p.weight_diff <= 0 ? '#3FD6A6' : '#FF5E3A',
+                                  }}>
+                                    ({p.weight_diff > 0 ? `+${p.weight_diff}` : p.weight_diff}kg)
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#666' }}>미기록</span>
+                            )}
+                          </td>
+
+                          {/* BMI 상태 */}
+                          <td>
+                            {p.bmi_info?.bmi ? (
+                              <span style={{
+                                fontSize: '11px',
+                                padding: '2px 8px',
+                                borderRadius: '4px',
+                                backgroundColor: `${p.bmi_info.color}22`,
+                                color: p.bmi_info.color,
+                                border: `1px solid ${p.bmi_info.color}44`,
+                                fontWeight: 'bold',
+                              }}>
+                                {p.bmi_info.bmi} ({p.bmi_info.label})
+                              </span>
+                            ) : (
+                              <span style={{ fontSize: '11px', color: '#666' }}>-</span>
+                            )}
+                          </td>
+
+                          {/* 목표 체중 */}
+                          <td style={{ color: '#aaa', fontSize: '12px' }}>
+                            {p.target_weight ? `${p.target_weight} kg` : '-'}
+                          </td>
+
                           <td>
                             <span className={`status-pill ${p.status === 'approved' ? (isExpired ? 'warn' : 'ok') : 'pending'}`}>
                               {p.status === 'approved' ? (isExpired ? `${p.duration}일 만료` : '진행중') : '입금대기'}
@@ -1193,24 +1261,124 @@ export default function AdminPage() {
         )}
       </main>
 
-      {/* 우측 회원 상세 패널 */}
+      {/* 우측 회원 상세 패널 (체중 & BMI 코칭 대시보드 탑재) */}
       {selectedUser && (
-        <div className="side-drawer">
+        <div className="side-drawer" style={{ width: '400px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-mid)' }}>참여자 상세 정보</div>
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-mid)' }}>참여자 코칭 상세 정보</div>
             <button className="close-btn" onClick={() => setSelectedUser(null)}>✕</button>
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '16px' }}>
             <div className="drawer-av">{selectedUser.name[0]}</div>
             <div>
-              <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedUser.name}</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                {selectedUser.startDate} 시작 · <strong>Day {selectedUser.currentDay} / {selectedUser.duration}일 진행 중</strong>
+              <div style={{ fontSize: '17px', fontWeight: 'bold' }}>{selectedUser.name}</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-mid)', marginTop: '2px' }}>
+                {selectedUser.startDate} 시작 · <strong>Day {selectedUser.currentDay} / {selectedUser.duration}일</strong> (🔥 완주 {selectedUser.streak}일)
               </div>
             </div>
           </div>
 
+          {/* ⭐️ [체중 코칭 대시보드 카드] */}
+          <div style={{ marginTop: '18px', padding: '16px', backgroundColor: '#181818', borderRadius: '12px', border: '1px solid #2e2e2e' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>⚖️ 체중 및 비만도(BMI) 분석</span>
+              {selectedUser.bmi_info?.label !== '-' && (
+                <span style={{
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  backgroundColor: `${selectedUser.bmi_info.color}22`,
+                  color: selectedUser.bmi_info.color,
+                  fontWeight: 'bold',
+                }}>
+                  {selectedUser.bmi_info.label} ({selectedUser.bmi_info.bmi})
+                </span>
+              )}
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', textAlign: 'center', marginBottom: '12px' }}>
+              <div style={{ backgroundColor: '#222', padding: '10px 6px', borderRadius: '8px' }}>
+                <div style={{ fontSize: '10.5px', color: '#888' }}>시작 체중</div>
+                <div style={{ fontSize: '14px', fontWeight: 'bold', marginTop: '4px', color: '#ddd' }}>
+                  {selectedUser.initial_weight ? `${selectedUser.initial_weight}kg` : '-'}
+                </div>
+              </div>
+              <div style={{ backgroundColor: '#222', padding: '10px 6px', borderRadius: '8px', border: '1px solid #3FD6A644' }}>
+                <div style={{ fontSize: '10.5px', color: '#3FD6A6' }}>현재 체중</div>
+                <div style={{ fontSize: '15px', fontWeight: 'bold', marginTop: '4px', color: '#3FD6A6' }}>
+                  {selectedUser.latest_weight ? `${selectedUser.latest_weight}kg` : '-'}
+                </div>
+              </div>
+              <div style={{ backgroundColor: '#222', padding: '10px 6px', borderRadius: '8px' }}>
+                <div style={{ fontSize: '10.5px', color: '#888' }}>목표 체중</div>
+                <div style={{ fontSize: '14px', fontWeight: 'bold', marginTop: '4px', color: '#FF5E3A' }}>
+                  {selectedUser.target_weight ? `${selectedUser.target_weight}kg` : '-'}
+                </div>
+              </div>
+            </div>
+
+            {/* 감량 성과 배너 */}
+            {selectedUser.weight_diff !== null && (
+              <div style={{
+                backgroundColor: selectedUser.weight_diff <= 0 ? 'rgba(63, 214, 166, 0.1)' : 'rgba(255, 94, 58, 0.1)',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                fontSize: '12px',
+              }}>
+                <span style={{ color: '#ccc' }}>시작 대비 변화량:</span>
+                <span style={{
+                  fontSize: '14px',
+                  fontWeight: 'bold',
+                  color: selectedUser.weight_diff <= 0 ? '#3FD6A6' : '#FF5E3A',
+                }}>
+                  {selectedUser.weight_diff > 0 ? `+${selectedUser.weight_diff} kg 증량` : `${Math.abs(selectedUser.weight_diff)} kg 감량 성공 🎉`}
+                </span>
+              </div>
+            )}
+
+            <div style={{ fontSize: '11px', color: '#777', marginTop: '10px', textAlign: 'right' }}>
+              신장(키): <strong>{selectedUser.height ? `${selectedUser.height} cm` : '미입력'}</strong>
+            </div>
+          </div>
+
+          {/* ⭐️ [일자별 체중 기록 히스토리 목록] */}
+          <div style={{ marginTop: '16px', padding: '14px', backgroundColor: '#181818', borderRadius: '12px', border: '1px solid #2e2e2e' }}>
+            <div style={{ fontSize: '12.5px', fontWeight: 'bold', color: '#eee', marginBottom: '10px' }}>
+              📋 일자별 체중 기록 이력 ({selectedUser.weight_history?.length || 0}건)
+            </div>
+
+            <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+              {selectedUser.weight_history && selectedUser.weight_history.length > 0 ? (
+                [...selectedUser.weight_history].reverse().map((rec: any, idx: number) => (
+                  <div
+                    key={rec.id || idx}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '8px 12px',
+                      backgroundColor: '#222',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                    }}
+                  >
+                    <span style={{ color: '#888' }}>{rec.record_date || toKSTDateString(rec.created_at)}</span>
+                    <strong style={{ color: '#3FD6A6' }}>{rec.weight} kg</strong>
+                  </div>
+                ))
+              ) : (
+                <div style={{ textAlign: 'center', color: '#666', fontSize: '11.5px', padding: '16px 0' }}>
+                  아직 입력된 체중 기록이 없습니다.
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 코스 기간 변경 */}
           <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
             <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>챌린지 코스 기간</div>
             <div style={{ display: 'flex', gap: '8px' }}>
@@ -1251,15 +1419,8 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <div style={{ marginTop: '12px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828', fontSize: '12px' }}>
-            <div style={{ color: '#aaa', marginBottom: '4px' }}>신체 설정 정보</div>
-            <div style={{ color: '#fff' }}>
-              키: <strong>{selectedUser.height ? `${selectedUser.height} cm` : '미입력'}</strong> / 
-              목표: <strong>{selectedUser.target_weight ? `${selectedUser.target_weight} kg` : '미입력'}</strong>
-            </div>
-          </div>
-
-          <div style={{ marginTop: '20px' }}>
+          {/* 승인 취소 버튼 */}
+          <div style={{ marginTop: '16px' }}>
             <button
               className="btn-primary"
               style={{
@@ -1273,7 +1434,8 @@ export default function AdminPage() {
             </button>
           </div>
 
-          <div style={{ marginTop: '12px', borderTop: '1px solid #262626', paddingTop: '16px' }}>
+          {/* 회원 영구 탈퇴 버튼 */}
+          <div style={{ marginTop: '12px', borderTop: '1px solid #262626', paddingTop: '14px', marginBottom: '20px' }}>
             <button
               type="button"
               onClick={() => handleDeleteUserCompletely(selectedUser)}
