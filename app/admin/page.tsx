@@ -210,9 +210,9 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [승인 취소 / 승인 클릭 핸들러]
+  // ⭐️ [개별 승인 취소/승인 핸들러: 취소 시 시작일과 로그를 절대 지우지 않음]
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경, 날짜/로그는 안전 보존)
+    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경하되 시작일과 미션로그 100% 보존)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
@@ -224,7 +224,7 @@ export default function AdminPage() {
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' }) // approved_at 날짜 유지!
+          .update({ status: 'pending' }) // approved_at은 건드리지 않음!
           .eq('id', user.id);
 
         if (error) throw error;
@@ -239,17 +239,16 @@ export default function AdminPage() {
     }
 
     // 2. 대기 상태인 회원 ➔ 승인하기
-    // 이전에 미션 기록이 있거나 시작일 이력이 남아있는 경우 선택 모달 오픈
+    // 이력이 남아있으면 재승인 선택 모달 오픈
     const hasHistory = user.rawApprovedAt || rawMissionLogs.some(l => l.user_id === user.id);
     if (hasHistory) {
       setReapprovingUser(user);
     } else {
-      // 순수 신규 회원: 오늘 날짜로 즉시 승인
       await executeDirectApprove(user.id);
     }
   };
 
-  // ⭐️ [재승인 실행: DB에서 최초 미션일을 자동 역산하여 100% 자동 복구]
+  // ⭐️ [재승인 실행 함수: 쿼리 수정 없이도 첫 미션일을 자동으로 찾아내어 원래 Day로 완벽 복원]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
@@ -257,7 +256,7 @@ export default function AdminPage() {
 
     try {
       if (mode === 'resume') {
-        // 🔍 회원의 가장 첫 번째 미션 기록 날짜를 DB에서 자동 조회
+        // 1. DB에서 회원의 가장 첫 번째 미션 날짜를 자동 조회
         const { data: firstLog } = await supabase
           .from('mission_logs')
           .select('log_date')
@@ -268,14 +267,14 @@ export default function AdminPage() {
 
         let restoredApprovedAt = user.rawApprovedAt;
 
-        // DB에 첫 미션 체크 날짜가 있다면 그 날짜를 진짜 시작일로 삼음
+        // 첫 미션 기록이 존재하면 그 날짜가 회원의 진짜 시작일!
         if (firstLog?.log_date) {
           restoredApprovedAt = `${firstLog.log_date}T00:00:00+09:00`;
         } else if (!restoredApprovedAt) {
-          // 미션 로그도 없다면 가입일시(createdAt)를 기준일로 삼음
           restoredApprovedAt = user.createdAt || new Date().toISOString();
         }
 
+        // 상태를 승인으로 돌리고, 시작일을 최초 미션일로 확실하게 갱신
         const { error } = await supabase
           .from('profiles')
           .update({
@@ -287,9 +286,9 @@ export default function AdminPage() {
         if (error) throw error;
 
         const calculatedDay = calculateAdminUserDay(restoredApprovedAt);
-        alert(`'${user.name}' 회원의 최초 시작일(${toKSTDateString(restoredApprovedAt)})을 자동으로 찾아내어 [Day ${calculatedDay}]로 완벽히 복구했습니다!`);
+        alert(`'${user.name}' 회원의 원래 시작일(${toKSTDateString(restoredApprovedAt)})을 찾아내어 [Day ${calculatedDay}]로 자동 복구되었습니다!`);
       } else {
-        // [새로 시작]: 오늘부터 Day 1로 시작하고 이전 미션 로그 삭제
+        // [새로 시작]: 오늘부터 Day 1로 설정하고 이전 미션 로그 삭제
         const todayIso = new Date().toISOString();
         const { error: pError } = await supabase
           .from('profiles')
@@ -394,7 +393,7 @@ export default function AdminPage() {
     }
   };
 
-  // 전체 기수 일괄 종료
+  // ⭐️ [전체 기수 일괄 종료: 다음 기수를 위해 미션 로그를 깨끗이 삭제하고 approved_at을 null로 변경]
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -606,7 +605,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* ⭐️ 재승인 선택 모달 (자동 복원 지원) */}
+      {/* ⭐️ 재승인 선택 모달 */}
       {reapprovingUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
@@ -620,7 +619,6 @@ export default function AdminPage() {
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
-              {/* 옵션 1: 최초 미션일 자동 추적 복구 */}
               <button
                 type="button"
                 disabled={isProcessing}
@@ -644,7 +642,6 @@ export default function AdminPage() {
                 </div>
               </button>
 
-              {/* 옵션 2: 새 기수 시작 */}
               <button
                 type="button"
                 disabled={isProcessing}
