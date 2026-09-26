@@ -584,7 +584,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // ⭐️ [수정 완료] 쇼츠 및 모든 유튜브 URL을 embed 형식으로 자동 변환하여 저장
+  // ⭐️ [PK 충돌 에러 완전 해결된 영상 저장 함수]
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -596,16 +596,16 @@ export default function AdminPage() {
     setIsSavingLecture(true);
 
     try {
-      const lectureData = {
+      const lectureData: any = {
         day: Number(editingLecture.day),
         week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
         title: editingLecture.title || `Day ${editingLecture.day} 영상`,
-        // ⭐️ 쇼츠든 모바일 링크든 무조건 embed URL로 변환하여 DB에 저장!
         video_url: normalizeYouTubeUrl(editingLecture.video_url || ''),
         description: editingLecture.description?.trim() || '',
         category: editingLecture.category || 'health',
       };
 
+      // 1. 기존 수정 모드인 경우 (editingLecture.id가 있을 때)
       if (!isNewLecture && editingLecture.id) {
         const { error } = await supabase
           .from('lectures')
@@ -613,7 +613,9 @@ export default function AdminPage() {
           .eq('id', editingLecture.id);
 
         if (error) throw error;
-      } else {
+      } 
+      // 2. 신규 등록이거나 id가 없는 경우: 혹시 같은 day & category가 이미 있는지 먼저 확인
+      else {
         const { data: existing } = await supabase
           .from('lectures')
           .select('id')
@@ -621,13 +623,15 @@ export default function AdminPage() {
           .eq('category', editingLecture.category || 'health')
           .maybeSingle();
 
-        if (existing) {
+        if (existing?.id) {
+          // 이미 있으면 해당 id를 지정해서 UPDATE! (PK 충돌 방지)
           const { error } = await supabase
             .from('lectures')
             .update(lectureData)
             .eq('id', existing.id);
           if (error) throw error;
         } else {
+          // 정말 없는 경우에만 INSERT
           const { error } = await supabase
             .from('lectures')
             .insert([lectureData]);
