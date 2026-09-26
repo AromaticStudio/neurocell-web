@@ -210,9 +210,9 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [개별 승인 취소/승인 핸들러: 취소 시 시작일과 로그를 절대 지우지 않음]
+  // ⭐️ [개별 승인 취소/승인 핸들러: 취소 시 날짜와 로그 절대 보존]
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경하되 시작일과 미션로그 100% 보존)
+    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 전환, 데이터 무손상)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
@@ -224,7 +224,7 @@ export default function AdminPage() {
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' }) // approved_at은 건드리지 않음!
+          .update({ status: 'pending' }) // 👈 approved_at 날짜는 그대로 둠!
           .eq('id', user.id);
 
         if (error) throw error;
@@ -239,16 +239,16 @@ export default function AdminPage() {
     }
 
     // 2. 대기 상태인 회원 ➔ 승인하기
-    // 이력이 남아있으면 재승인 선택 모달 오픈
-    const hasHistory = user.rawApprovedAt || rawMissionLogs.some(l => l.user_id === user.id);
-    if (hasHistory) {
+    // 이전에 시작일 이력이 있는 경우 선택 팝업 오픈
+    if (user.rawApprovedAt) {
       setReapprovingUser(user);
     } else {
+      // 순수 신규 회원: 오늘 날짜로 승인
       await executeDirectApprove(user.id);
     }
   };
 
-  // ⭐️ [재승인 실행 함수: 쿼리 수정 없이도 첫 미션일을 자동으로 찾아내어 원래 Day로 완벽 복원]
+  // ⭐️ [재승인 실행 함수: 'resume' 시 approved_at 날짜를 절대 건드리지 않음!]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
@@ -256,39 +256,17 @@ export default function AdminPage() {
 
     try {
       if (mode === 'resume') {
-        // 1. DB에서 회원의 가장 첫 번째 미션 날짜를 자동 조회
-        const { data: firstLog } = await supabase
-          .from('mission_logs')
-          .select('log_date')
-          .eq('user_id', user.id)
-          .order('log_date', { ascending: true })
-          .limit(1)
-          .maybeSingle();
-
-        let restoredApprovedAt = user.rawApprovedAt;
-
-        // 첫 미션 기록이 존재하면 그 날짜가 회원의 진짜 시작일!
-        if (firstLog?.log_date) {
-          restoredApprovedAt = `${firstLog.log_date}T00:00:00+09:00`;
-        } else if (!restoredApprovedAt) {
-          restoredApprovedAt = user.createdAt || new Date().toISOString();
-        }
-
-        // 상태를 승인으로 돌리고, 시작일을 최초 미션일로 확실하게 갱신
+        // ⭐️ 핵심: DB에 저장된 날짜를 절대로 덮어쓰지 않고 status만 'approved'로 변경!
         const { error } = await supabase
           .from('profiles')
-          .update({
-            status: 'approved',
-            approved_at: restoredApprovedAt,
-          })
+          .update({ status: 'approved' })
           .eq('id', user.id);
 
         if (error) throw error;
 
-        const calculatedDay = calculateAdminUserDay(restoredApprovedAt);
-        alert(`'${user.name}' 회원의 원래 시작일(${toKSTDateString(restoredApprovedAt)})을 찾아내어 [Day ${calculatedDay}]로 자동 복구되었습니다!`);
+        alert(`'${user.name}' 회원의 기존 진행(Day ${user.currentDay})이 안전하게 복구되었습니다!`);
       } else {
-        // [새로 시작]: 오늘부터 Day 1로 설정하고 이전 미션 로그 삭제
+        // [새로운 기수로 시작]: 오늘부터 Day 1로 설정하고 이전 미션 로그 삭제
         const todayIso = new Date().toISOString();
         const { error: pError } = await supabase
           .from('profiles')
@@ -393,7 +371,7 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [전체 기수 일괄 종료: 다음 기수를 위해 미션 로그를 깨끗이 삭제하고 approved_at을 null로 변경]
+  // 전체 기수 일괄 종료
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -614,7 +592,7 @@ export default function AdminPage() {
               '{reapprovingUser.name}' 승인 방식 선택
             </h3>
             <p style={{ fontSize: '13px', color: '#aaa', lineHeight: 1.5, margin: '0 0 20px 0' }}>
-              활동 이력이 있는 회원입니다.<br />
+              이전에 승인된 이력이 있는 회원입니다.<br />
               어떤 방식으로 승인하시겠습니까?
             </p>
 
@@ -635,10 +613,10 @@ export default function AdminPage() {
                 }}
               >
                 <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                  ↩️ 기존 진행 유지 (첫 미션일 자동 복구)
+                  ↩️ 기존 진행 유지 (Day {reapprovingUser.currentDay} 복구)
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#bbb', marginTop: '4px', lineHeight: 1.4 }}>
-                  실수로 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 기록과 원래 Day 수가 자동으로 복원됩니다)
+                  실수로 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 체크 기록과 진행 일차 유지)
                 </div>
               </button>
 
@@ -661,7 +639,7 @@ export default function AdminPage() {
                   🌱 새로운 기수로 시작 (Day 1 리셋)
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#888', marginTop: '4px', lineHeight: 1.4 }}>
-                  새로운 기수를 완전히 처음부터 시작할 때 선택하세요. (오늘부터 Day 1, 이전 미션 로그 비움)
+                  새로운 챌린지 기수를 완전히 처음부터 시작할 때 선택하세요. (오늘부터 Day 1, 이전 미션 로그 비움)
                 </div>
               </button>
             </div>
@@ -833,7 +811,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 노트 패널 */}
+            {/* 코치 노트 편집 패널 */}
             <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
@@ -884,7 +862,7 @@ export default function AdminPage() {
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
-              {/* 입금 승인 대기 명단 */}
+              {/* 좌측: 입금 승인 대기 명단 */}
               <div className="panel-box">
                 <h3>⚠️ 입금 승인 대기 명단</h3>
                 {pendingCount === 0 ? (
@@ -904,7 +882,7 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* 미인증 집중 케어 알림 */}
+              {/* 우측: 🔔 3일 이상 미활동 집중 케어 알림 */}
               <div className="panel-box">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h3 style={{ margin: 0 }}>🔔 미인증 집중 케어 알림</h3>
