@@ -49,6 +49,7 @@ export default function AdminPage() {
 
   // 재승인 모달 상태 (실수 복구 vs 새로 시작 선택용)
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
 
   // 코치 노트 상태
   const [coachNote, setCoachNote] = useState('');
@@ -116,7 +117,9 @@ export default function AdminPage() {
         supabase.from('mission_logs').select('user_id, log_date, completed').eq('completed', true),
       ]);
 
-      if (!pError && profilesData) {
+      if (pError) throw pError;
+
+      if (profilesData) {
         if (missionLogsData) {
           setRawMissionLogs(missionLogsData);
         }
@@ -155,8 +158,9 @@ export default function AdminPage() {
         });
         setParticipants(mapped);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      alert(`데이터 불러오기 오류: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -200,21 +204,21 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [개별 승인/취소 핸들러]
+  // ⭐️ [개별 승인/취소 클릭 핸들러]
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소(대기로 변경)
+    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경, 데이터는 보존)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
         `'${user.name}' 회원의 상태를 '입금 대기'로 전환하시겠습니까?\n\n` +
-        `※ 안전 보존: 회원의 미션 인증 기록과 진행 일차는 삭제되지 않고 안전하게 유지됩니다.`
+        `※ 안전 보존: 회원의 미션 인증 기록과 진행 일차는 삭제되지 않고 안전하게 보존됩니다.`
       );
       if (!ok) return;
 
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' }) // 날짜(approved_at)와 미션로그는 보존!
+          .update({ status: 'pending' })
           .eq('id', user.id);
 
         if (error) throw error;
@@ -223,41 +227,54 @@ export default function AdminPage() {
         await fetchParticipants();
         if (selectedUser?.id === user.id) setSelectedUser(null);
       } catch (err: any) {
-        alert(`처리 실패: ${err.message}`);
+        alert(`상태 변경 실패: ${err.message}`);
       }
       return;
     }
 
     // 2. 대기 상태인 회원 ➔ 승인하기
-    // 과거에 승인받아 진행했던 이력(rawApprovedAt)이 있는 경우: 선택 팝업 모달 오픈
+    // 이전에 시작일(rawApprovedAt) 이력이 존재하면 선택 팝업 오픈
     if (user.rawApprovedAt) {
       setReapprovingUser(user);
     } else {
-      // 최초 신규 참가자: 바로 오늘부터 Day 1로 승인
-      await executeDirectApprove(user.id, new Date().toISOString(), false);
+      // 최초 신규 참가자: 오늘 날짜로 즉시 승인
+      await executeDirectApprove(user.id);
     }
   };
 
-  // 재승인 실행 함수 (기존 유지 vs 새로 시작)
+  // ⭐️ [재승인 선택 실행 함수: 확실하게 업데이트 반영]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
-    if (!reapprovingUser) return;
+    if (!reapprovingUser || isProcessing) return;
+    setIsProcessing(true);
     const user = reapprovingUser;
 
     try {
       if (mode === 'resume') {
-        // 기존 진행 유지: 원래 날짜 그대로 유지하고 상태만 approved로 변경
+        // 기존 진행 유지:
+        // 혹시 approved_at이 비어있으면 오늘 날짜를 넣어주고, 있으면 기존 날짜 유지
+        const updatePayload: any = {
+          status: 'approved',
+        };
+        if (!user.rawApprovedAt) {
+          updatePayload.approved_at = new Date().toISOString();
+        }
+
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'approved' })
+          .update(updatePayload)
           .eq('id', user.id);
 
         if (error) throw error;
-        alert(`'${user.name}' 회원의 이전 진행 일차(Day ${user.currentDay})와 루틴 기록이 안전하게 복구되었습니다!`);
+
+        alert(`'${user.name}' 회원의 진행(Day ${user.currentDay})이 정상 승인되었습니다!`);
       } else {
-        // 새로 시작 (리셋): 오늘 날짜로 새로 세팅하고 이전 미션 로그 비우기
+        // 새로 시작 (Day 1 리셋):
         const { error: pError } = await supabase
           .from('profiles')
-          .update({ status: 'approved', approved_at: new Date().toISOString() })
+          .update({
+            status: 'approved',
+            approved_at: new Date().toISOString(),
+          })
           .eq('id', user.id);
 
         if (pError) throw pError;
@@ -265,30 +282,33 @@ export default function AdminPage() {
         // 새 기수 시작이므로 이전 미션 로그 삭제
         await supabase.from('mission_logs').delete().eq('user_id', user.id);
 
-        alert(`'${user.name}' 회원이 오늘부터 Day 1로 새 기수를 시작합니다. (이전 로그 초기화 완료)`);
+        alert(`'${user.name}' 회원이 오늘부터 Day 1로 새 기수를 시작합니다.`);
       }
 
       setReapprovingUser(null);
       await fetchParticipants();
-      if (selectedUser?.id === user.id) setSelectedUser(null);
+      if (selectedUser?.id === user.id) {
+        setSelectedUser(null);
+      }
     } catch (err: any) {
-      alert(`처리 실패: ${err.message}`);
+      alert(`승인 처리 실패: ${err.message}`);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  // 신규 회원 직접 승인 함수
-  const executeDirectApprove = async (userId: string, approvedAtDate: string, clearLogs: boolean) => {
+  // 신규 회원 직접 승인
+  const executeDirectApprove = async (userId: string) => {
     try {
       const { error } = await supabase
         .from('profiles')
-        .update({ status: 'approved', approved_at: approvedAtDate })
+        .update({
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+        })
         .eq('id', userId);
 
       if (error) throw error;
-
-      if (clearLogs) {
-        await supabase.from('mission_logs').delete().eq('user_id', userId);
-      }
 
       alert('참가자가 정상 승인되었습니다. (Day 1 시작)');
       await fetchParticipants();
@@ -320,7 +340,7 @@ export default function AdminPage() {
 
       if (profError) throw profError;
 
-      alert(`${user.name} 회원의 모든 데이터가 영구 파기(탈퇴 처리)되었습니다.`);
+      alert(`${user.name} 회원의 모든 데이터가 영구 파기되었습니다.`);
       setSelectedUser(null);
       await fetchParticipants();
     } catch (err: any) {
@@ -336,7 +356,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (!confirm(`현재 입금 대기 중인 ${pendingUsers.length}명을 모두 승인하시겠습니까?\n(새로운 신청자는 오늘부터 Day 1로 시작됩니다)`)) {
+    if (!confirm(`현재 입금 대기 중인 ${pendingUsers.length}명을 모두 승인하시겠습니까?`)) {
       return;
     }
 
@@ -356,7 +376,7 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [전체 기수 일괄 종료(초기화)]: 다음 기수를 위해 미션 로그를 깨끗하게 비우는 본래 기능 유지!
+  // 전체 기수 일괄 종료 (이전 미션 로그 초기화)
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -368,8 +388,8 @@ export default function AdminPage() {
       `🚫 [전체 기수 일괄 종료 및 초기화]\n\n` +
       `현재 진행 중인 ${approvedUsers.length}명의 기수를 모두 종료하시겠습니까?\n\n` +
       `• 모든 승인 회원의 상태가 '입금 대기'로 전환됩니다.\n` +
-      `• 다음 기수 맞이를 위해 모든 미션 체크 로그(mission_logs)가 깨끗이 초기화(삭제)됩니다.\n` +
-      `• (회원의 키, 목표체중, 체중 변화 기록은 안전하게 보존됩니다)`
+      `• 다음 기수 맞이를 위해 모든 미션 체크 로그가 깨끗이 초기화(삭제)됩니다.\n` +
+      `• (키, 목표체중, 체중 변화 기록은 안전하게 보존됩니다)`
     )) {
       return;
     }
@@ -377,7 +397,6 @@ export default function AdminPage() {
     try {
       const approvedIds = approvedUsers.map(p => p.id);
 
-      // 1. 상태를 대기로 바꾸고 승인일 초기화
       const { error } = await supabase
         .from('profiles')
         .update({ status: 'pending', approved_at: null })
@@ -385,14 +404,13 @@ export default function AdminPage() {
 
       if (error) throw error;
 
-      // 2. 미션 로그 깨끗하게 삭제 (서버 찌꺼기 방지)
       await supabase
         .from('mission_logs')
         .delete()
         .in('user_id', approvedIds);
 
       await fetchParticipants();
-      alert('모든 회원의 기수가 종료되고 미션 체크 기록이 깔끔하게 초기화되었습니다.');
+      alert('모든 회원의 기수가 종료되고 미션 기록이 깔끔하게 초기화되었습니다.');
     } catch (err: any) {
       alert(`일괄 취소 실패: ${err.message}`);
     }
@@ -414,7 +432,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // 영상 내용 저장 (고유 ID 기준 update)
+  // 영상 저장 (고유 ID 기준 update)
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -570,7 +588,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* ⭐️ 재승인 선택 모달 (실수 복구 vs 새로 시작 선택) */}
+      {/* ⭐️ 재승인 선택 모달 */}
       {reapprovingUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
@@ -584,9 +602,10 @@ export default function AdminPage() {
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
-              {/* 옵션 1: 기존 진행 유지 (실수 복구) */}
+              {/* 옵션 1: 기존 진행 유지 */}
               <button
                 type="button"
+                disabled={isProcessing}
                 onClick={() => executeReapproveChoice('resume')}
                 style={{
                   padding: '14px 16px',
@@ -595,7 +614,8 @@ export default function AdminPage() {
                   border: '1px solid #3FD6A6',
                   color: '#3FD6A6',
                   textAlign: 'left',
-                  cursor: 'pointer',
+                  cursor: isProcessing ? 'not-allowed' : 'pointer',
+                  opacity: isProcessing ? 0.6 : 1,
                 }}
               >
                 <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
@@ -606,9 +626,10 @@ export default function AdminPage() {
                 </div>
               </button>
 
-              {/* 옵션 2: 새 기수 시작 (Day 1 리셋) */}
+              {/* 옵션 2: 새 기수 시작 */}
               <button
                 type="button"
+                disabled={isProcessing}
                 onClick={() => executeReapproveChoice('reset')}
                 style={{
                   padding: '14px 16px',
@@ -617,7 +638,8 @@ export default function AdminPage() {
                   border: '1px solid #444',
                   color: '#fff',
                   textAlign: 'left',
-                  cursor: 'pointer',
+                  cursor: isProcessing ? 'not-allowed' : 'pointer',
+                  opacity: isProcessing ? 0.6 : 1,
                 }}
               >
                 <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
@@ -631,6 +653,7 @@ export default function AdminPage() {
 
             <button
               type="button"
+              disabled={isProcessing}
               onClick={() => setReapprovingUser(null)}
               style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: 'transparent', color: '#777', fontSize: '12px', cursor: 'pointer' }}
             >
@@ -918,7 +941,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 콘텐츠 관리 (서브 탭 분리) */}
+        {/* 콘텐츠 관리 */}
         {activeTab === 'content' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -942,7 +965,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 상단 서브 탭 전환 버튼 */}
+            {/* 상단 서브 탭 */}
             <div style={{ display: 'flex', gap: '8px', margin: '20px 0 16px' }}>
               <button
                 type="button"
@@ -1149,7 +1172,7 @@ export default function AdminPage() {
                           <td><strong>Day {p.currentDay} / {p.duration}</strong></td>
                           <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
                           <td>
-                            <span className={`status-pill ${p.status === 'approved' && !isExpired ? 'ok' : 'warn'}`}>
+                            <span className={`status-pill ${p.status === 'approved' ? (isExpired ? 'warn' : 'ok') : 'pending'}`}>
                               {p.status === 'approved' ? (isExpired ? `${p.duration}일 만료` : '진행중') : '입금대기'}
                             </span>
                           </td>
@@ -1253,7 +1276,7 @@ export default function AdminPage() {
               }}
               onClick={() => handleApprovalClick(selectedUser)}
             >
-              {selectedUser.status === 'approved' ? '승인 취소 (대기로 변경)' : '✓ 승인하기'}
+              {selectedUser.status === 'approved' ? '승인 취소 (대기로 전환)' : '✓ 승인하기'}
             </button>
           </div>
 
