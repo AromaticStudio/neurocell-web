@@ -575,7 +575,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
- // ⭐️ [UUID 기반으로 안전하게 수정/등록되는 영상 저장 함수]
+  // ⭐️ [UUID 기반으로 안전하게 수정/등록되는 영상 저장 함수]
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -960,7 +960,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 노트 패널 */}
+            {/* 코치 노트 패널 (기존 원본 유지) */}
             <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>

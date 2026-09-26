@@ -3,8 +3,7 @@
 import React, { useState, useEffect, useMemo, useRef, UIEvent } from 'react';
 import { supabase } from '../lib/supabase';
 
-// 🔒 1:1 카카오톡 오픈채팅 고정 링크 (다른 관리자가 대시보드에서 수정 불가)
-// 어머님의 오픈프로필 또는 1:1 오픈채팅 링크 주소를 아래 따옴표 안에 넣어주세요.
+// 🔒 1:1 카카오톡 오픈채팅 고정 링크
 const OPEN_CHAT_URL = 'https://open.kakao.com/o/sNeiChPi';
 
 const INITIAL_MISSIONS = [
@@ -44,8 +43,9 @@ export default function Home() {
   const [selectedLecture, setSelectedLecture] = useState<any>(null);
   const [selectedMotivation, setSelectedMotivation] = useState<any>(null);
 
-  // 코치 노트 (DB 연동)
+  // 코치 노트 상태 (공지 및 일차별 노트)
   const [coachNote, setCoachNote] = useState('가짜 배고픔은 뇌가 만든 착각이에요. 오늘도 나 자신을 믿고 루틴을 지켜봐요 🌤️');
+  const [dailyCoachNote, setDailyCoachNote] = useState('');
 
   // 닉네임 수정 모달
   const [isEditingName, setIsEditingName] = useState(false);
@@ -169,32 +169,45 @@ export default function Home() {
     }
   };
 
+  // ⭐️ [핵심 수정] 강의 및 일차별 코치 노트 로드 함수
+  const loadLecturesAndDailyNote = async (currentDayNum = 1) => {
+    // 1. 강의 목록 불러오기
+    const { data: lecData } = await supabase.from('lectures').select('*').order('day', { ascending: true });
+    if (lecData) {
+      setLectures(lecData);
+      const firstHealth = lecData.find(l => !l.category || l.category === 'health');
+      if (firstHealth) setSelectedLecture(firstHealth);
+
+      const firstMotivation = lecData.find(l => l.category === 'motivation');
+      if (firstMotivation) setSelectedMotivation(firstMotivation);
+    }
+
+    // 2. 전체 공지 코치 노트 불러오기
+    const { data: noteData } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'coach_note')
+      .maybeSingle();
+
+    if (noteData?.value) {
+      setCoachNote(noteData.value);
+    }
+
+    // 3. ⭐️ 회원의 현재 Day에 맞는 100일치 일차별 코치 노트 불러오기 (최대 100일)
+    const targetDay = Math.min(Math.max(currentDayNum, 1), 100);
+    const { data: dailyData } = await supabase
+      .from('coach_daily_notes')
+      .select('content')
+      .eq('day', targetDay)
+      .maybeSingle();
+
+    if (dailyData?.content) {
+      setDailyCoachNote(dailyData.content);
+    }
+  };
+
   useEffect(() => {
     let isMounted = true;
-
-    const loadLecturesAndSettings = async () => {
-      // 1. 강의 목록 불러오기
-      const { data: lecData } = await supabase.from('lectures').select('*').order('day', { ascending: true });
-      if (lecData && isMounted) {
-        setLectures(lecData);
-        const firstHealth = lecData.find(l => !l.category || l.category === 'health');
-        if (firstHealth) setSelectedLecture(firstHealth);
-
-        const firstMotivation = lecData.find(l => l.category === 'motivation');
-        if (firstMotivation) setSelectedMotivation(firstMotivation);
-      }
-
-      // 2. 코치 노트 불러오기
-      const { data: noteData } = await supabase
-        .from('app_settings')
-        .select('value')
-        .eq('key', 'coach_note')
-        .maybeSingle();
-
-      if (noteData?.value && isMounted) {
-        setCoachNote(noteData.value);
-      }
-    };
 
     const syncUserData = async (currentUser: any) => {
       if (!currentUser || !isMounted) return;
@@ -205,12 +218,14 @@ export default function Home() {
           .eq('id', currentUser.id)
           .maybeSingle();
 
+        let calculatedDay = 1;
         if (profileData && isMounted) {
           setProfile(profileData);
           setInputNickname(profileData.nickname || '');
           setInputHeight(profileData.height ? String(profileData.height) : '');
           setInputTargetWeight(profileData.target_weight ? String(profileData.target_weight) : '');
-          setUserDay(calculateUserDay(profileData.approved_at));
+          calculatedDay = calculateUserDay(profileData.approved_at);
+          setUserDay(calculatedDay);
         } else if (isMounted) {
           const initialName = currentUser.user_metadata?.full_name || currentUser.user_metadata?.name || '참가자';
           const newProfile = {
@@ -226,6 +241,9 @@ export default function Home() {
 
         await loadUserMissionLogs(currentUser.id);
         await loadWeightRecords(currentUser.id);
+        if (isMounted) {
+          await loadLecturesAndDailyNote(calculatedDay);
+        }
       } catch (err) {
         console.error('프로필 로드 에러:', err);
       }
@@ -246,7 +264,7 @@ export default function Home() {
     };
 
     getInitialSession();
-    loadLecturesAndSettings();
+    loadLecturesAndDailyNote(1);
 
     const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user && isMounted) {
@@ -1011,13 +1029,15 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* DB 연동된 코치 노트 */}
-              <div className="msg-card">
-                <div className="k">COACH'S NOTE · 매일 업데이트</div>
-                <p style={{ whiteSpace: 'pre-wrap' }}>{coachNote}</p>
+              {/* ⭐️ [수정 반영] 일차별 코치 노트 자동 노출 카드 */}
+              <div className="msg-card" style={{ border: '1px solid #3FD6A644' }}>
+                <div className="k" style={{ color: '#3FD6A6' }}>🔥 DAY {userDay} 오늘의 코치 응원 메시지</div>
+                <p style={{ whiteSpace: 'pre-wrap', fontSize: '13.5px', lineHeight: 1.6, color: '#fff', margin: '6px 0 0 0' }}>
+                  {dailyCoachNote || coachNote}
+                </p>
               </div>
 
-              {/* 💬 1:1 카톡 질문 패널 (패딩 및 카드 디자인 적용) */}
+              {/* 💬 1:1 카톡 질문 패널 */}
               <div style={{
                 marginTop: '16px',
                 marginBottom: '10px',
