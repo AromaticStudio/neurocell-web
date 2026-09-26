@@ -5,7 +5,7 @@ import { supabase } from '../../lib/supabase';
 
 const ADMIN_PASSWORD = 'coach1234';
 
-// ⭐️ [신규 추가] 유튜브 쇼츠, 모바일 단축 링크, 일반 링크를 모두 embed 형식으로 자동 변환하는 함수
+// ⭐️ 유튜브 쇼츠, 모바일 단축 링크, 일반 링크를 모두 embed 형식으로 자동 변환하는 함수
 const normalizeYouTubeUrl = (url: string) => {
   if (!url) return '';
   const trimmed = url.trim();
@@ -111,10 +111,8 @@ const WeightTrendChart = ({ history, targetWeight }: { history: any[]; targetWei
   return (
     <div style={{ position: 'relative', width: '100%', height: `${height}px`, backgroundColor: '#1c1c1c', borderRadius: '8px', overflow: 'hidden' }}>
       <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
-        {/* 기준 그리드 가이드라인 */}
         <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#2e2e2e" strokeDasharray="3 3" />
         
-        {/* 꺾은선 그래프 라인 */}
         <polyline
           fill="none"
           stroke={strokeColor}
@@ -124,7 +122,6 @@ const WeightTrendChart = ({ history, targetWeight }: { history: any[]; targetWei
           points={polylinePoints}
         />
 
-        {/* 각 날짜별 포인트 점 */}
         {points.map((p, i) => (
           <circle
             key={i}
@@ -138,7 +135,6 @@ const WeightTrendChart = ({ history, targetWeight }: { history: any[]; targetWei
         ))}
       </svg>
 
-      {/* 시작 / 최신 라벨 */}
       <div style={{ position: 'absolute', bottom: '4px', left: '8px', fontSize: '9.5px', color: '#777' }}>
         시작 {weights[0]}kg
       </div>
@@ -248,7 +244,6 @@ export default function AdminPage() {
           setRawMissionLogs(missionLogsData);
         }
 
-        // 유저별 체중 기록 맵 구축
         const wMap: { [userId: string]: any[] } = {};
         if (weightsData) {
           weightsData.forEach(w => {
@@ -276,20 +271,17 @@ export default function AdminPage() {
           const realCompletedDays = userCompleteDaysMap[p.id] || 0;
           const duration = p.challenge_duration || 30;
 
-          // 체중 데이터 산출
           const userLogs = wMap[p.id] || [];
           const initialWeight = userLogs.length > 0 ? Number(userLogs[0].weight) : (p.initial_weight ? Number(p.initial_weight) : null);
           const latestWeight = userLogs.length > 0 ? Number(userLogs[userLogs.length - 1].weight) : initialWeight;
           const targetWeight = p.target_weight ? Number(p.target_weight) : null;
           const height = p.height ? Number(p.height) : null;
 
-          // 총 감량 수치 (현재 - 시작)
           let weightDiff: number | null = null;
           if (initialWeight !== null && latestWeight !== null) {
             weightDiff = Number((latestWeight - initialWeight).toFixed(1));
           }
 
-          // 감량 목표 달성률 계산 (%)
           let progressRate = 0;
           if (initialWeight && targetWeight && latestWeight && initialWeight > targetWeight) {
             const totalGoal = initialWeight - targetWeight;
@@ -297,7 +289,6 @@ export default function AdminPage() {
             progressRate = Math.min(100, Math.max(0, Math.round((currentLost / totalGoal) * 100)));
           }
 
-          // BMI 계산
           const bmiInfo = calculateBMI(latestWeight, height);
 
           return {
@@ -584,11 +575,12 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // ⭐️ [PK 충돌 에러 완전 해결된 영상 저장 함수]
+  // ⭐️ [중복 키 에러 원천 차단: 기존 영상은 그 자리에서 UPDATE만 실행]
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
-    if (!editingLecture.day || editingLecture.day <= 0) {
+    const targetDay = Number(editingLecture.day);
+    if (!targetDay || targetDay <= 0) {
       alert('올바른 Day 숫자를 입력해 주세요.');
       return;
     }
@@ -596,53 +588,55 @@ export default function AdminPage() {
     setIsSavingLecture(true);
 
     try {
-      const lectureData: any = {
-        day: Number(editingLecture.day),
-        week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
-        title: editingLecture.title || `Day ${editingLecture.day} 영상`,
+      const targetCategory = editingLecture.category || 'health';
+      const lecturePayload = {
+        day: targetDay,
+        week: editingLecture.week || `Week ${Math.ceil(targetDay / 7)}`,
+        title: editingLecture.title || `Day ${targetDay} 영상`,
         video_url: normalizeYouTubeUrl(editingLecture.video_url || ''),
         description: editingLecture.description?.trim() || '',
-        category: editingLecture.category || 'health',
+        category: targetCategory,
       };
 
-      // 1. 기존 수정 모드인 경우 (editingLecture.id가 있을 때)
-      if (!isNewLecture && editingLecture.id) {
-        const { error } = await supabase
-          .from('lectures')
-          .update(lectureData)
-          .eq('id', editingLecture.id);
-
-        if (error) throw error;
-      } 
-      // 2. 신규 등록이거나 id가 없는 경우: 혹시 같은 day & category가 이미 있는지 먼저 확인
-      else {
+      // 1. editingLecture.id가 있다면 해당 ID 우선 검색, 없다면 Day와 Category로 검색
+      let existingId = editingLecture.id;
+      if (!existingId) {
         const { data: existing } = await supabase
           .from('lectures')
           .select('id')
-          .eq('day', Number(editingLecture.day))
-          .eq('category', editingLecture.category || 'health')
+          .eq('day', targetDay)
+          .eq('category', targetCategory)
           .maybeSingle();
 
         if (existing?.id) {
-          // 이미 있으면 해당 id를 지정해서 UPDATE! (PK 충돌 방지)
-          const { error } = await supabase
-            .from('lectures')
-            .update(lectureData)
-            .eq('id', existing.id);
-          if (error) throw error;
-        } else {
-          // 정말 없는 경우에만 INSERT
-          const { error } = await supabase
-            .from('lectures')
-            .insert([lectureData]);
-          if (error) throw error;
+          existingId = existing.id;
         }
       }
 
-      alert(`[Day ${editingLecture.day}] 영상이 성공적으로 저장되었습니다!`);
+      // 2. 이미 존재하는 강의인 경우: 절대 새 번호 따지 않고 해당 행만 UPDATE!
+      if (existingId) {
+        const { error: updateError } = await supabase
+          .from('lectures')
+          .update(lecturePayload)
+          .eq('id', existingId);
+
+        if (updateError) throw updateError;
+        alert(`[Day ${targetDay}] 기존 영상이 성공적으로 수정되었습니다!`);
+      } 
+      // 3. DB에 아예 없던 새로운 Day인 경우에만 최초 INSERT
+      else {
+        const { error: insertError } = await supabase
+          .from('lectures')
+          .insert([lecturePayload]);
+
+        if (insertError) throw insertError;
+        alert(`[Day ${targetDay}] 새 영상이 성공적으로 등록되었습니다!`);
+      }
+
       setEditingLecture(null);
       await fetchLectures();
     } catch (err: any) {
+      console.error(err);
       alert(`저장 실패: ${err.message}`);
     } finally {
       setIsSavingLecture(false);
@@ -945,7 +939,6 @@ export default function AdminPage() {
           <button className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`} onClick={() => setActiveTab('participants')}>
             <span className="ic">👥</span>참여자 관리
           </button>
-          {/* 신설된 체중 모니터링 탭 */}
           <button className={`nav-btn ${activeTab === 'weights' ? 'active' : ''}`} onClick={() => setActiveTab('weights')}>
             <span className="ic">⚖️</span>체중 모니터링
           </button>
@@ -1242,7 +1235,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 3. 참여자 관리 (원래 명단 테이블) */}
+        {/* 3. 참여자 관리 (명단 테이블) */}
         {activeTab === 'participants' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
