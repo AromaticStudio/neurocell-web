@@ -51,10 +51,6 @@ export default function AdminPage() {
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // 시작일 수동 수정 상태
-  const [customStartDate, setCustomStartDate] = useState('');
-  const [isUpdatingDate, setIsUpdatingDate] = useState(false);
-
   // 코치 노트 상태
   const [coachNote, setCoachNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -156,19 +152,16 @@ export default function AdminPage() {
             status: p.status || 'pending',
             duration,
             rawApprovedAt: p.approved_at,
+            createdAt: p.created_at,
             height: p.height,
             target_weight: p.target_weight,
           };
         });
         setParticipants(mapped);
 
-        // 상세창이 열려있으면 업데이트 동기화
         if (selectedUser) {
           const found = mapped.find(u => u.id === selectedUser.id);
-          if (found) {
-            setSelectedUser(found);
-            setCustomStartDate(found.startDate !== '-' ? found.startDate : toKSTDateString());
-          }
+          if (found) setSelectedUser(found);
         }
       }
     } catch (err: any) {
@@ -219,7 +212,7 @@ export default function AdminPage() {
 
   // ⭐️ [승인 취소 / 승인 클릭 핸들러]
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기로 전환하되 날짜/로그는 100% 보존)
+    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경, 날짜/로그는 안전 보존)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
@@ -231,13 +224,14 @@ export default function AdminPage() {
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' }) // approved_at은 유지!
+          .update({ status: 'pending' }) // approved_at 날짜 유지!
           .eq('id', user.id);
 
         if (error) throw error;
 
         alert(`'${user.name}' 회원이 대기 상태로 변경되었습니다. (기존 데이터 안전 보존됨)`);
         await fetchParticipants();
+        if (selectedUser?.id === user.id) setSelectedUser(null);
       } catch (err: any) {
         alert(`상태 변경 실패: ${err.message}`);
       }
@@ -245,16 +239,17 @@ export default function AdminPage() {
     }
 
     // 2. 대기 상태인 회원 ➔ 승인하기
-    // 시작일 이력이나 미션 로그가 존재하면 선택 팝업 오픈
+    // 이전에 미션 기록이 있거나 시작일 이력이 남아있는 경우 선택 모달 오픈
     const hasHistory = user.rawApprovedAt || rawMissionLogs.some(l => l.user_id === user.id);
     if (hasHistory) {
       setReapprovingUser(user);
     } else {
+      // 순수 신규 회원: 오늘 날짜로 즉시 승인
       await executeDirectApprove(user.id);
     }
   };
 
-  // ⭐️ [재승인 실행 함수 - 날짜 영구 보존 및 자동 역산 복구]
+  // ⭐️ [재승인 실행: DB에서 최초 미션일을 자동 역산하여 100% 자동 복구]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
@@ -262,38 +257,39 @@ export default function AdminPage() {
 
     try {
       if (mode === 'resume') {
-        // [기존 진행 유지]: 날짜는 유지하되, 혹시 approved_at이 비어있다면 미션 첫날로 역산 복원
-        let finalApprovedAt = user.rawApprovedAt;
+        // 🔍 회원의 가장 첫 번째 미션 기록 날짜를 DB에서 자동 조회
+        const { data: firstLog } = await supabase
+          .from('mission_logs')
+          .select('log_date')
+          .eq('user_id', user.id)
+          .order('log_date', { ascending: true })
+          .limit(1)
+          .maybeSingle();
 
-        if (!finalApprovedAt) {
-          const { data: firstLog } = await supabase
-            .from('mission_logs')
-            .select('log_date')
-            .eq('user_id', user.id)
-            .order('log_date', { ascending: true })
-            .limit(1)
-            .maybeSingle();
+        let restoredApprovedAt = user.rawApprovedAt;
 
-          if (firstLog?.log_date) {
-            finalApprovedAt = `${firstLog.log_date}T00:00:00+09:00`;
-          } else {
-            finalApprovedAt = new Date().toISOString();
-          }
+        // DB에 첫 미션 체크 날짜가 있다면 그 날짜를 진짜 시작일로 삼음
+        if (firstLog?.log_date) {
+          restoredApprovedAt = `${firstLog.log_date}T00:00:00+09:00`;
+        } else if (!restoredApprovedAt) {
+          // 미션 로그도 없다면 가입일시(createdAt)를 기준일로 삼음
+          restoredApprovedAt = user.createdAt || new Date().toISOString();
         }
 
         const { error } = await supabase
           .from('profiles')
           .update({
             status: 'approved',
-            approved_at: finalApprovedAt,
+            approved_at: restoredApprovedAt,
           })
           .eq('id', user.id);
 
         if (error) throw error;
 
-        alert(`'${user.name}' 회원의 기존 진행(Day ${calculateAdminUserDay(finalApprovedAt)})이 복구되었습니다!`);
+        const calculatedDay = calculateAdminUserDay(restoredApprovedAt);
+        alert(`'${user.name}' 회원의 최초 시작일(${toKSTDateString(restoredApprovedAt)})을 자동으로 찾아내어 [Day ${calculatedDay}]로 완벽히 복구했습니다!`);
       } else {
-        // [새로 시작]: 오늘부터 Day 1로 시작하고 이전 미션 로그 비우기
+        // [새로 시작]: 오늘부터 Day 1로 시작하고 이전 미션 로그 삭제
         const todayIso = new Date().toISOString();
         const { error: pError } = await supabase
           .from('profiles')
@@ -310,37 +306,12 @@ export default function AdminPage() {
       }
 
       setReapprovingUser(null);
+      if (selectedUser?.id === user.id) setSelectedUser(null);
       await fetchParticipants();
     } catch (err: any) {
       alert(`승인 처리 실패: ${err.message}`);
     } finally {
       setIsProcessing(false);
-    }
-  };
-
-  // ⭐️ [수동 시작일 변경 함수 - 관리자가 날짜를 마음대로 복구 가능]
-  const handleSaveCustomStartDate = async () => {
-    if (!selectedUser || !customStartDate) return;
-    setIsUpdatingDate(true);
-
-    try {
-      const newApprovedAt = `${customStartDate}T00:00:00+09:00`;
-      const { error } = await supabase
-        .from('profiles')
-        .update({
-          approved_at: newApprovedAt,
-          status: 'approved',
-        })
-        .eq('id', selectedUser.id);
-
-      if (error) throw error;
-
-      alert(`'${selectedUser.name}' 회원의 시작일이 [${customStartDate}]로 변경되어 Day ${calculateAdminUserDay(newApprovedAt)}로 복구되었습니다!`);
-      await fetchParticipants();
-    } catch (err: any) {
-      alert(`시작일 변경 실패: ${err.message}`);
-    } finally {
-      setIsUpdatingDate(false);
     }
   };
 
@@ -635,7 +606,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* ⭐️ 재승인 선택 모달 */}
+      {/* ⭐️ 재승인 선택 모달 (자동 복원 지원) */}
       {reapprovingUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
@@ -644,11 +615,12 @@ export default function AdminPage() {
               '{reapprovingUser.name}' 승인 방식 선택
             </h3>
             <p style={{ fontSize: '13px', color: '#aaa', lineHeight: 1.5, margin: '0 0 20px 0' }}>
-              이전에 활동 이력이 있는 회원입니다.<br />
+              활동 이력이 있는 회원입니다.<br />
               어떤 방식으로 승인하시겠습니까?
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+              {/* 옵션 1: 최초 미션일 자동 추적 복구 */}
               <button
                 type="button"
                 disabled={isProcessing}
@@ -665,13 +637,14 @@ export default function AdminPage() {
                 }}
               >
                 <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                  ↩️ 기존 진행 유지 (Day 복구)
+                  ↩️ 기존 진행 유지 (첫 미션일 자동 복구)
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#bbb', marginTop: '4px', lineHeight: 1.4 }}>
-                  실수로 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 체크 기록과 진행 일차 유지)
+                  실수로 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 기록과 원래 Day 수가 자동으로 복원됩니다)
                 </div>
               </button>
 
+              {/* 옵션 2: 새 기수 시작 */}
               <button
                 type="button"
                 disabled={isProcessing}
@@ -863,7 +836,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 노트 편집 패널 */}
+            {/* 코치 노트 패널 */}
             <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
@@ -914,7 +887,7 @@ export default function AdminPage() {
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
-              {/* 좌측: 입금 승인 대기 명단 */}
+              {/* 입금 승인 대기 명단 */}
               <div className="panel-box">
                 <h3>⚠️ 입금 승인 대기 명단</h3>
                 {pendingCount === 0 ? (
@@ -934,7 +907,7 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* 우측: 미인증 집중 케어 알림 */}
+              {/* 미인증 집중 케어 알림 */}
               <div className="panel-box">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h3 style={{ margin: 0 }}>🔔 미인증 집중 케어 알림</h3>
@@ -1258,56 +1231,12 @@ export default function AdminPage() {
             <div>
               <div style={{ fontSize: '16px', fontWeight: 'bold' }}>{selectedUser.name}</div>
               <div style={{ fontSize: '11px', color: 'var(--text-mid)', marginTop: '2px' }}>
-                {selectedUser.startDate} 승인 · <strong>Day {selectedUser.currentDay} / {selectedUser.duration}일 진행 중</strong>
+                {selectedUser.startDate} 시작 · <strong>Day {selectedUser.currentDay} / {selectedUser.duration}일 진행 중</strong>
               </div>
             </div>
           </div>
 
-          {/* ⭐️ [특급 안전장치: 시작일(approved_at) 수동 지정 / 복구 컨트롤러] */}
-          <div style={{ marginTop: '16px', padding: '14px', backgroundColor: '#202020', borderRadius: '10px', border: '1px solid #383838' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#3FD6A6' }}>📅 챌린지 시작일 (일차 수동 지정)</div>
-              <span style={{ fontSize: '10.5px', color: '#888' }}>Day 계산 기준일</span>
-            </div>
-            <div style={{ display: 'flex', gap: '6px' }}>
-              <input
-                type="date"
-                value={customStartDate || (selectedUser.startDate !== '-' ? selectedUser.startDate : toKSTDateString())}
-                onChange={e => setCustomStartDate(e.target.value)}
-                style={{
-                  flex: 1,
-                  padding: '8px 10px',
-                  borderRadius: '6px',
-                  border: '1px solid #444',
-                  backgroundColor: '#111',
-                  color: '#fff',
-                  fontSize: '12px',
-                }}
-              />
-              <button
-                type="button"
-                disabled={isUpdatingDate}
-                onClick={handleSaveCustomStartDate}
-                style={{
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  border: 'none',
-                  backgroundColor: '#3FD6A6',
-                  color: '#000',
-                  fontWeight: 700,
-                  fontSize: '11.5px',
-                  cursor: isUpdatingDate ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isUpdatingDate ? '변경중' : '날짜 적용'}
-              </button>
-            </div>
-            <div style={{ fontSize: '10.5px', color: '#aaa', marginTop: '6px', lineHeight: 1.4 }}>
-              💡 시작일을 과거 날짜로 지정하면 원하는 일차(Day N)로 즉시 복구됩니다.
-            </div>
-          </div>
-
-          <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
+          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
             <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>챌린지 코스 기간</div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
