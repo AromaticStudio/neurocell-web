@@ -575,7 +575,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // ⭐️ [중복 키 에러 원천 차단: 기존 영상은 그 자리에서 UPDATE만 실행]
+ // ⭐️ [UUID 기반으로 안전하게 수정/등록되는 영상 저장 함수]
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -588,42 +588,26 @@ export default function AdminPage() {
     setIsSavingLecture(true);
 
     try {
-      const targetCategory = editingLecture.category || 'health';
       const lecturePayload = {
         day: targetDay,
         week: editingLecture.week || `Week ${Math.ceil(targetDay / 7)}`,
         title: editingLecture.title || `Day ${targetDay} 영상`,
         video_url: normalizeYouTubeUrl(editingLecture.video_url || ''),
         description: editingLecture.description?.trim() || '',
-        category: targetCategory,
+        category: editingLecture.category || 'health',
       };
 
-      // 1. editingLecture.id가 있다면 해당 ID 우선 검색, 없다면 Day와 Category로 검색
-      let existingId = editingLecture.id;
-      if (!existingId) {
-        const { data: existing } = await supabase
-          .from('lectures')
-          .select('id')
-          .eq('day', targetDay)
-          .eq('category', targetCategory)
-          .maybeSingle();
-
-        if (existing?.id) {
-          existingId = existing.id;
-        }
-      }
-
-      // 2. 이미 존재하는 강의인 경우: 절대 새 번호 따지 않고 해당 행만 UPDATE!
-      if (existingId) {
+      // ⭐️ [핵심] 기존 영상 수정 모드: 고유 id가 있으므로 Day 번호를 1에서 5로 바꿔도 그 자리에서 안전하게 수정됨!
+      if (!isNewLecture && editingLecture.id) {
         const { error: updateError } = await supabase
           .from('lectures')
           .update(lecturePayload)
-          .eq('id', existingId);
+          .eq('id', editingLecture.id);
 
         if (updateError) throw updateError;
-        alert(`[Day ${targetDay}] 기존 영상이 성공적으로 수정되었습니다!`);
+        alert(`영상 내용이 성공적으로 수정되었습니다!`);
       } 
-      // 3. DB에 아예 없던 새로운 Day인 경우에만 최초 INSERT
+      // ⭐️ [신규 등록 모드]: 완전히 새로 추가할 때만 INSERT
       else {
         const { error: insertError } = await supabase
           .from('lectures')
