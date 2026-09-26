@@ -51,6 +51,10 @@ export default function AdminPage() {
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
+  // 시작일 수동 수정 상태
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [isUpdatingDate, setIsUpdatingDate] = useState(false);
+
   // 코치 노트 상태
   const [coachNote, setCoachNote] = useState('');
   const [savingNote, setSavingNote] = useState(false);
@@ -157,6 +161,15 @@ export default function AdminPage() {
           };
         });
         setParticipants(mapped);
+
+        // 상세창이 열려있으면 업데이트 동기화
+        if (selectedUser) {
+          const found = mapped.find(u => u.id === selectedUser.id);
+          if (found) {
+            setSelectedUser(found);
+            setCustomStartDate(found.startDate !== '-' ? found.startDate : toKSTDateString());
+          }
+        }
       }
     } catch (err: any) {
       console.error(err);
@@ -204,28 +217,27 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [개별 승인/취소 클릭 핸들러]
+  // ⭐️ [승인 취소 / 승인 클릭 핸들러]
   const handleApprovalClick = async (user: any) => {
-    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기 상태로 변경, 데이터는 보존)
+    // 1. 이미 승인된 회원 ➔ 승인 취소 (대기로 전환하되 날짜/로그는 100% 보존)
     if (user.status === 'approved') {
       const ok = confirm(
         `[승인 취소 (대기 전환)]\n\n` +
         `'${user.name}' 회원의 상태를 '입금 대기'로 전환하시겠습니까?\n\n` +
-        `※ 안전 보존: 회원의 미션 인증 기록과 진행 일차는 삭제되지 않고 안전하게 보존됩니다.`
+        `※ 회원의 시작일과 미션 인증 기록은 DB에 안전하게 보존됩니다.`
       );
       if (!ok) return;
 
       try {
         const { error } = await supabase
           .from('profiles')
-          .update({ status: 'pending' })
+          .update({ status: 'pending' }) // approved_at은 유지!
           .eq('id', user.id);
 
         if (error) throw error;
 
         alert(`'${user.name}' 회원이 대기 상태로 변경되었습니다. (기존 데이터 안전 보존됨)`);
         await fetchParticipants();
-        if (selectedUser?.id === user.id) setSelectedUser(null);
       } catch (err: any) {
         alert(`상태 변경 실패: ${err.message}`);
       }
@@ -233,79 +245,102 @@ export default function AdminPage() {
     }
 
     // 2. 대기 상태인 회원 ➔ 승인하기
-    // 이전에 시작일(rawApprovedAt) 이력이 존재하면 선택 팝업 오픈
-    if (user.rawApprovedAt) {
+    // 시작일 이력이나 미션 로그가 존재하면 선택 팝업 오픈
+    const hasHistory = user.rawApprovedAt || rawMissionLogs.some(l => l.user_id === user.id);
+    if (hasHistory) {
       setReapprovingUser(user);
     } else {
-      // 최초 신규 참가자: 오늘 날짜로 즉시 승인
       await executeDirectApprove(user.id);
     }
   };
 
- // ⭐️ [재승인 실행 함수 - 무조건 approved로 확실하게 변경]
+  // ⭐️ [재승인 실행 함수 - 날짜 영구 보존 및 자동 역산 복구]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
     const user = reapprovingUser;
 
     try {
-      let targetApprovedAt = user.rawApprovedAt;
+      if (mode === 'resume') {
+        // [기존 진행 유지]: 날짜는 유지하되, 혹시 approved_at이 비어있다면 미션 첫날로 역산 복원
+        let finalApprovedAt = user.rawApprovedAt;
 
-      // 만약 기존 날짜가 비어있거나, 새로 시작(reset)을 선택한 경우 오늘 날짜로 세팅
-      if (mode === 'reset' || !targetApprovedAt) {
-        targetApprovedAt = new Date().toISOString();
-      }
+        if (!finalApprovedAt) {
+          const { data: firstLog } = await supabase
+            .from('mission_logs')
+            .select('log_date')
+            .eq('user_id', user.id)
+            .order('log_date', { ascending: true })
+            .limit(1)
+            .maybeSingle();
 
-      console.log('승인 시도 유저 ID:', user.id, '새 상태: approved', '날짜:', targetApprovedAt);
+          if (firstLog?.log_date) {
+            finalApprovedAt = `${firstLog.log_date}T00:00:00+09:00`;
+          } else {
+            finalApprovedAt = new Date().toISOString();
+          }
+        }
 
-      const { data, error } = await supabase
-        .from('profiles')
-        .update({
-          status: 'approved',
-          approved_at: targetApprovedAt,
-        })
-        .eq('id', user.id)
-        .select(); // 👈 실제로 업데이트가 반영되었는지 바로 확인
+        const { error } = await supabase
+          .from('profiles')
+          .update({
+            status: 'approved',
+            approved_at: finalApprovedAt,
+          })
+          .eq('id', user.id);
 
-      if (error) {
-        throw new Error(`DB 업데이트 실패: ${error.message} (${error.details || ''})`);
-      }
+        if (error) throw error;
 
-      if (!data || data.length === 0) {
-        throw new Error('Supabase RLS(보안 정책) 권한 문제로 데이터가 수정되지 않았습니다. Supabase SQL 에디터에서 update 정책을 확인해주세요.');
-      }
+        alert(`'${user.name}' 회원의 기존 진행(Day ${calculateAdminUserDay(finalApprovedAt)})이 복구되었습니다!`);
+      } else {
+        // [새로 시작]: 오늘부터 Day 1로 시작하고 이전 미션 로그 비우기
+        const todayIso = new Date().toISOString();
+        const { error: pError } = await supabase
+          .from('profiles')
+          .update({
+            status: 'approved',
+            approved_at: todayIso,
+          })
+          .eq('id', user.id);
 
-      // 새로 시작일 경우에만 미션 로그 비우기
-      if (mode === 'reset') {
+        if (pError) throw pError;
+
         await supabase.from('mission_logs').delete().eq('user_id', user.id);
+        alert(`'${user.name}' 회원이 오늘부터 Day 1로 새 기수를 시작합니다.`);
       }
 
-      // 화면 상태 즉각 수동 동기화 (새로고침 대기 없이 화면에 바로 반영)
-      setParticipants(prev =>
-        prev.map(p =>
-          p.id === user.id
-            ? {
-                ...p,
-                status: 'approved',
-                rawApprovedAt: targetApprovedAt,
-                startDate: toKSTDateString(targetApprovedAt),
-                currentDay: calculateAdminUserDay(targetApprovedAt),
-              }
-            : p
-        )
-      );
-
-      alert(`'${user.name}' 회원이 성공적으로 승인되었습니다!`);
       setReapprovingUser(null);
-      if (selectedUser?.id === user.id) setSelectedUser(null);
-      
-      // 최신 데이터 다시 fetch
-      fetchParticipants();
+      await fetchParticipants();
     } catch (err: any) {
-      console.error(err);
-      alert(`[승인 오류 발생]\n${err.message}`);
+      alert(`승인 처리 실패: ${err.message}`);
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  // ⭐️ [수동 시작일 변경 함수 - 관리자가 날짜를 마음대로 복구 가능]
+  const handleSaveCustomStartDate = async () => {
+    if (!selectedUser || !customStartDate) return;
+    setIsUpdatingDate(true);
+
+    try {
+      const newApprovedAt = `${customStartDate}T00:00:00+09:00`;
+      const { error } = await supabase
+        .from('profiles')
+        .update({
+          approved_at: newApprovedAt,
+          status: 'approved',
+        })
+        .eq('id', selectedUser.id);
+
+      if (error) throw error;
+
+      alert(`'${selectedUser.name}' 회원의 시작일이 [${customStartDate}]로 변경되어 Day ${calculateAdminUserDay(newApprovedAt)}로 복구되었습니다!`);
+      await fetchParticipants();
+    } catch (err: any) {
+      alert(`시작일 변경 실패: ${err.message}`);
+    } finally {
+      setIsUpdatingDate(false);
     }
   };
 
@@ -388,7 +423,7 @@ export default function AdminPage() {
     }
   };
 
-  // 전체 기수 일괄 종료 (이전 미션 로그 초기화)
+  // 전체 기수 일괄 종료
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
@@ -444,7 +479,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
-  // 영상 저장 (고유 ID 기준 update)
+  // 영상 저장
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -528,7 +563,7 @@ export default function AdminPage() {
     }
   };
 
-  // 🔔 3일 이상 미인증 회원 탐지 로직
+  // 3일 이상 미인증 회원 탐지
   const inactiveAlerts = useMemo(() => {
     const todayStr = toKSTDateString(new Date());
     const [tY, tM, tD] = todayStr.split('-').map(Number);
@@ -609,12 +644,11 @@ export default function AdminPage() {
               '{reapprovingUser.name}' 승인 방식 선택
             </h3>
             <p style={{ fontSize: '13px', color: '#aaa', lineHeight: 1.5, margin: '0 0 20px 0' }}>
-              이전에 승인된 이력이 있는 회원입니다.<br />
+              이전에 활동 이력이 있는 회원입니다.<br />
               어떤 방식으로 승인하시겠습니까?
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
-              {/* 옵션 1: 기존 진행 유지 */}
               <button
                 type="button"
                 disabled={isProcessing}
@@ -631,14 +665,13 @@ export default function AdminPage() {
                 }}
               >
                 <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
-                  ↩️ 기존 진행 유지 (Day {reapprovingUser.currentDay} 복구)
+                  ↩️ 기존 진행 유지 (Day 복구)
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#bbb', marginTop: '4px', lineHeight: 1.4 }}>
-                  실수로 승인을 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 체크 기록과 진행 일차 유지)
+                  실수로 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 체크 기록과 진행 일차 유지)
                 </div>
               </button>
 
-              {/* 옵션 2: 새 기수 시작 */}
               <button
                 type="button"
                 disabled={isProcessing}
@@ -658,7 +691,7 @@ export default function AdminPage() {
                   🌱 새로운 기수로 시작 (Day 1 리셋)
                 </div>
                 <div style={{ fontSize: '11.5px', color: '#888', marginTop: '4px', lineHeight: 1.4 }}>
-                  새로운 챌린지 기수를 완전히 처음부터 시작할 때 선택하세요. (오늘부터 Day 1, 이전 미션 로그 비움)
+                  새로운 기수를 완전히 처음부터 시작할 때 선택하세요. (오늘부터 Day 1, 이전 미션 로그 비움)
                 </div>
               </button>
             </div>
@@ -901,7 +934,7 @@ export default function AdminPage() {
                 )}
               </div>
 
-              {/* 우측: 🔔 3일 이상 미활동 집중 케어 알림 */}
+              {/* 우측: 미인증 집중 케어 알림 */}
               <div className="panel-box">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
                   <h3 style={{ margin: 0 }}>🔔 미인증 집중 케어 알림</h3>
@@ -1230,7 +1263,51 @@ export default function AdminPage() {
             </div>
           </div>
 
-          <div style={{ marginTop: '16px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
+          {/* ⭐️ [특급 안전장치: 시작일(approved_at) 수동 지정 / 복구 컨트롤러] */}
+          <div style={{ marginTop: '16px', padding: '14px', backgroundColor: '#202020', borderRadius: '10px', border: '1px solid #383838' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#3FD6A6' }}>📅 챌린지 시작일 (일차 수동 지정)</div>
+              <span style={{ fontSize: '10.5px', color: '#888' }}>Day 계산 기준일</span>
+            </div>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <input
+                type="date"
+                value={customStartDate || (selectedUser.startDate !== '-' ? selectedUser.startDate : toKSTDateString())}
+                onChange={e => setCustomStartDate(e.target.value)}
+                style={{
+                  flex: 1,
+                  padding: '8px 10px',
+                  borderRadius: '6px',
+                  border: '1px solid #444',
+                  backgroundColor: '#111',
+                  color: '#fff',
+                  fontSize: '12px',
+                }}
+              />
+              <button
+                type="button"
+                disabled={isUpdatingDate}
+                onClick={handleSaveCustomStartDate}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#3FD6A6',
+                  color: '#000',
+                  fontWeight: 700,
+                  fontSize: '11.5px',
+                  cursor: isUpdatingDate ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {isUpdatingDate ? '변경중' : '날짜 적용'}
+              </button>
+            </div>
+            <div style={{ fontSize: '10.5px', color: '#aaa', marginTop: '6px', lineHeight: 1.4 }}>
+              💡 시작일을 과거 날짜로 지정하면 원하는 일차(Day N)로 즉시 복구됩니다.
+            </div>
+          </div>
+
+          <div style={{ marginTop: '14px', padding: '12px', backgroundColor: '#1a1a1a', borderRadius: '8px', border: '1px solid #282828' }}>
             <div style={{ fontSize: '12px', color: '#aaa', marginBottom: '8px' }}>챌린지 코스 기간</div>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
