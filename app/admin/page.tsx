@@ -5,6 +5,35 @@ import { supabase } from '../../lib/supabase';
 
 const ADMIN_PASSWORD = 'coach1234';
 
+// ⭐️ [신규 추가] 유튜브 쇼츠, 모바일 단축 링크, 일반 링크를 모두 embed 형식으로 자동 변환하는 함수
+const normalizeYouTubeUrl = (url: string) => {
+  if (!url) return '';
+  const trimmed = url.trim();
+  if (trimmed.includes('/embed/')) return trimmed;
+
+  let videoId = '';
+
+  // 1) 쇼츠 링크: /shorts/VID_ID
+  if (trimmed.includes('/shorts/')) {
+    videoId = trimmed.split('/shorts/')[1]?.split('?')[0]?.split('&')[0];
+  }
+  // 2) 모바일 공유 링크: youtu.be/VID_ID
+  else if (trimmed.includes('youtu.be/')) {
+    videoId = trimmed.split('youtu.be/')[1]?.split('?')[0]?.split('&')[0];
+  }
+  // 3) PC 일반 링크: watch?v=VID_ID
+  else if (trimmed.includes('watch?v=')) {
+    videoId = trimmed.split('watch?v=')[1]?.split('&')[0]?.split('?')[0];
+  }
+
+  // ID를 추출했으면 embed URL로 변환하여 반환
+  if (videoId) {
+    return `https://www.youtube.com/embed/${videoId}`;
+  }
+
+  return trimmed;
+};
+
 // 한국 시간(KST) 기준 YYYY-MM-DD 문자열 추출 함수
 const toKSTDateString = (dateInput: Date | string = new Date()) => {
   const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput;
@@ -123,7 +152,6 @@ const WeightTrendChart = ({ history, targetWeight }: { history: any[]; targetWei
 export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [inputPw, setInputPw] = useState('');
-  // ⭐️ 신설된 'weights' 탭 포함
   const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants' | 'weights'>('dashboard');
   
   // 콘텐츠 관리 서브 탭 (클래스 vs 딱백미)
@@ -556,6 +584,7 @@ export default function AdminPage() {
     setIsNewLecture(true);
   };
 
+  // ⭐️ [수정 완료] 쇼츠 및 모든 유튜브 URL을 embed 형식으로 자동 변환하여 저장
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -571,7 +600,8 @@ export default function AdminPage() {
         day: Number(editingLecture.day),
         week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
         title: editingLecture.title || `Day ${editingLecture.day} 영상`,
-        video_url: editingLecture.video_url?.trim() || '',
+        // ⭐️ 쇼츠든 모바일 링크든 무조건 embed URL로 변환하여 DB에 저장!
+        video_url: normalizeYouTubeUrl(editingLecture.video_url || ''),
         description: editingLecture.description?.trim() || '',
         category: editingLecture.category || 'health',
       };
@@ -863,10 +893,13 @@ export default function AdminPage() {
               style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '12px', boxSizing: 'border-box' }}
             />
 
-            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>유튜브 영상 주소 (URL)</label>
+            <label style={{ display: 'block', fontSize: '12px', color: '#aaa', marginBottom: '6px' }}>
+              유튜브 영상 주소 (URL)
+              <span style={{ fontSize: '11px', color: '#3FD6A6', marginLeft: '6px' }}>*쇼츠, 모바일 링크 자동 변환</span>
+            </label>
             <input
               type="text"
-              placeholder="예: https://www.youtube.com/watch?v=..."
+              placeholder="예: https://www.youtube.com/shorts/... 또는 watch?v=..."
               value={editingLecture.video_url || ''}
               onChange={e => setEditingLecture({ ...editingLecture, video_url: e.target.value })}
               style={{ width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #444', backgroundColor: '#222', color: '#fff', marginBottom: '12px', boxSizing: 'border-box' }}
@@ -908,7 +941,7 @@ export default function AdminPage() {
           <button className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`} onClick={() => setActiveTab('participants')}>
             <span className="ic">👥</span>참여자 관리
           </button>
-          {/* ⭐️ 신설된 체중 모니터링 탭 */}
+          {/* 신설된 체중 모니터링 탭 */}
           <button className={`nav-btn ${activeTab === 'weights' ? 'active' : ''}`} onClick={() => setActiveTab('weights')}>
             <span className="ic">⚖️</span>체중 모니터링
           </button>
@@ -1205,7 +1238,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 3. 참여자 관리 (원래 명단 테이블 형태 유지) */}
+        {/* 3. 참여자 관리 (원래 명단 테이블) */}
         {activeTab === 'participants' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -1303,7 +1336,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* ⭐️ 4. 신설된 [체중 모니터링] 탭 (카드 그리드 & 꺾은선 추이 그래프) */}
+        {/* 4. 체중 모니터링 탭 (카드 그리드 & 꺾은선 추이 그래프) */}
         {activeTab === 'weights' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -1340,7 +1373,6 @@ export default function AdminPage() {
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px', marginTop: '20px' }}>
                 {filteredWeightUsers.map(user => {
-                  const hasRecord = user.latest_weight !== null;
                   const isSuccessLost = user.weight_diff !== null && user.weight_diff < 0;
 
                   return (
@@ -1447,7 +1479,7 @@ export default function AdminPage() {
                         </div>
                       )}
 
-                      {/* ⭐️ 미니 감량 추이 그래프 (SVG) */}
+                      {/* 미니 감량 추이 그래프 (SVG) */}
                       <div style={{ marginBottom: '12px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
                           <span style={{ fontSize: '11px', color: '#777' }}>📈 체중 감량 추이</span>
