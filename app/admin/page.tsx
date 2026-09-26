@@ -46,20 +46,97 @@ const calculateBMI = (weightKg: number | null, heightCm: number | null) => {
   return { bmi: bmiVal, label: '고도비만', color: '#FF3B30' };
 };
 
+// SVG 체중 추이 미니 그래프 컴포넌트
+const WeightTrendChart = ({ history, targetWeight }: { history: any[]; targetWeight: number | null }) => {
+  if (!history || history.length < 2) {
+    return (
+      <div style={{ height: '70px', display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#1c1c1c', borderRadius: '8px', fontSize: '11px', color: '#666' }}>
+        {history && history.length === 1 ? `1회 기록 (${history[0].weight}kg) - 2회 이상부터 그래프가 표시됩니다` : '체중 기록 없음'}
+      </div>
+    );
+  }
+
+  const weights = history.map(h => Number(h.weight));
+  const minW = Math.min(...weights, targetWeight ? targetWeight : Infinity) - 1;
+  const maxW = Math.max(...weights) + 1;
+  const range = maxW - minW || 1;
+
+  const width = 320;
+  const height = 70;
+  const paddingX = 14;
+  const paddingY = 12;
+
+  // 포인트 좌표 계산
+  const points = weights.map((w, idx) => {
+    const x = paddingX + (idx / (weights.length - 1)) * (width - paddingX * 2);
+    const y = height - paddingY - ((w - minW) / range) * (height - paddingY * 2);
+    return { x, y, weight: w };
+  });
+
+  const polylinePoints = points.map(p => `${p.x},${p.y}`).join(' ');
+
+  // 시작 체중 대비 감량 여부에 따른 그래프 색상 (감량: 민트, 증량: 오렌지)
+  const isDown = weights[weights.length - 1] <= weights[0];
+  const strokeColor = isDown ? '#3FD6A6' : '#FF5E3A';
+
+  return (
+    <div style={{ position: 'relative', width: '100%', height: `${height}px`, backgroundColor: '#1c1c1c', borderRadius: '8px', overflow: 'hidden' }}>
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} style={{ display: 'block' }}>
+        {/* 기준 그리드 가이드라인 */}
+        <line x1={paddingX} y1={height / 2} x2={width - paddingX} y2={height / 2} stroke="#2e2e2e" strokeDasharray="3 3" />
+        
+        {/* 꺾은선 그래프 라인 */}
+        <polyline
+          fill="none"
+          stroke={strokeColor}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={polylinePoints}
+        />
+
+        {/* 각 날짜별 포인트 점 */}
+        {points.map((p, i) => (
+          <circle
+            key={i}
+            cx={p.x}
+            cy={p.y}
+            r={i === points.length - 1 ? 4 : 2.5}
+            fill={i === points.length - 1 ? strokeColor : '#fff'}
+            stroke="#1c1c1c"
+            strokeWidth="1"
+          />
+        ))}
+      </svg>
+
+      {/* 시작 / 최신 라벨 */}
+      <div style={{ position: 'absolute', bottom: '4px', left: '8px', fontSize: '9.5px', color: '#777' }}>
+        시작 {weights[0]}kg
+      </div>
+      <div style={{ position: 'absolute', top: '4px', right: '8px', fontSize: '10.5px', color: strokeColor, fontWeight: 'bold' }}>
+        최신 {weights[weights.length - 1]}kg
+      </div>
+    </div>
+  );
+};
+
 export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [inputPw, setInputPw] = useState('');
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants'>('dashboard');
+  // ⭐️ 신설된 'weights' 탭 포함
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants' | 'weights'>('dashboard');
   
   // 콘텐츠 관리 서브 탭 (클래스 vs 딱백미)
   const [contentSubTab, setContentSubTab] = useState<'health' | 'motivation'>('health');
   
   const [participants, setParticipants] = useState<any[]>([]);
   const [rawMissionLogs, setRawMissionLogs] = useState<any[]>([]);
-  const [userWeightMap, setUserWeightMap] = useState<{ [userId: string]: any[] }>({});
   const [dayList, setDayList] = useState<any[]>([]);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+  // 체중 필터 검색 (체중 탭 전용)
+  const [searchName, setSearchName] = useState('');
 
   // 재승인 모달 상태
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
@@ -150,7 +227,6 @@ export default function AdminPage() {
             if (!wMap[w.user_id]) wMap[w.user_id] = [];
             wMap[w.user_id].push(w);
           });
-          setUserWeightMap(wMap);
         }
 
         const userCompleteDaysMap: { [userId: string]: number } = {};
@@ -172,17 +248,25 @@ export default function AdminPage() {
           const realCompletedDays = userCompleteDaysMap[p.id] || 0;
           const duration = p.challenge_duration || 30;
 
-          // 체중 지표 계산
+          // 체중 데이터 산출
           const userLogs = wMap[p.id] || [];
           const initialWeight = userLogs.length > 0 ? Number(userLogs[0].weight) : (p.initial_weight ? Number(p.initial_weight) : null);
           const latestWeight = userLogs.length > 0 ? Number(userLogs[userLogs.length - 1].weight) : initialWeight;
           const targetWeight = p.target_weight ? Number(p.target_weight) : null;
           const height = p.height ? Number(p.height) : null;
 
-          // 총 감량 수치 (시작 체중 - 최신 체중)
+          // 총 감량 수치 (현재 - 시작)
           let weightDiff: number | null = null;
           if (initialWeight !== null && latestWeight !== null) {
             weightDiff = Number((latestWeight - initialWeight).toFixed(1));
+          }
+
+          // 감량 목표 달성률 계산 (%)
+          let progressRate = 0;
+          if (initialWeight && targetWeight && latestWeight && initialWeight > targetWeight) {
+            const totalGoal = initialWeight - targetWeight;
+            const currentLost = initialWeight - latestWeight;
+            progressRate = Math.min(100, Math.max(0, Math.round((currentLost / totalGoal) * 100)));
           }
 
           // BMI 계산
@@ -203,6 +287,7 @@ export default function AdminPage() {
             initial_weight: initialWeight,
             latest_weight: latestWeight,
             weight_diff: weightDiff,
+            progress_rate: progressRate,
             bmi_info: bmiInfo,
             weight_history: userLogs,
           };
@@ -260,7 +345,7 @@ export default function AdminPage() {
     }
   };
 
-  // 승인 취소 / 승인 핸들러 (날짜 완벽 보존)
+  // 승인 취소 / 승인 핸들러
   const handleApprovalClick = async (user: any) => {
     if (user.status === 'approved') {
       const ok = confirm(
@@ -294,7 +379,7 @@ export default function AdminPage() {
     }
   };
 
-  // 재승인 실행 함수 (기존 시작일 손대지 않고 상태만 변경)
+  // 재승인 실행 함수
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
@@ -455,7 +540,7 @@ export default function AdminPage() {
     }
   };
 
-  // 영상 관련 핸들러들
+  // 영상 관련 핸들러
   const handleOpenNewLectureModal = () => {
     const targetList = dayList.filter(d => (d.category || 'health') === contentSubTab);
     const nextDay = targetList.length > 0 ? Math.max(...targetList.map(d => d.day)) + 1 : 1;
@@ -597,6 +682,11 @@ export default function AdminPage() {
     });
   }, [dayList, contentSubTab]);
 
+  // 체중 탭용 검색 필터링 목록
+  const filteredWeightUsers = useMemo(() => {
+    return participants.filter(p => p.name.toLowerCase().includes(searchName.toLowerCase().trim()));
+  }, [participants, searchName]);
+
   if (!isAuthenticated) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -624,7 +714,7 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
-      {/* 재승인 선택 모달 */}
+      {/* 재승인 모달 */}
       {reapprovingUser && (
         <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
@@ -816,14 +906,18 @@ export default function AdminPage() {
             <span className="ic">🎬</span>콘텐츠 관리
           </button>
           <button className={`nav-btn ${activeTab === 'participants' ? 'active' : ''}`} onClick={() => setActiveTab('participants')}>
-            <span className="ic">👥</span>참여자 관리 (체중 모니터링)
+            <span className="ic">👥</span>참여자 관리
+          </button>
+          {/* ⭐️ 신설된 체중 모니터링 탭 */}
+          <button className={`nav-btn ${activeTab === 'weights' ? 'active' : ''}`} onClick={() => setActiveTab('weights')}>
+            <span className="ic">⚖️</span>체중 모니터링
           </button>
         </nav>
       </aside>
 
       {/* 본문 */}
       <main className="admin-main">
-        {/* 대시보드 */}
+        {/* 1. 대시보드 */}
         {activeTab === 'dashboard' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -975,7 +1069,7 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 콘텐츠 관리 */}
+        {/* 2. 콘텐츠 관리 */}
         {activeTab === 'content' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
@@ -1111,13 +1205,13 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 참여자 관리 (체중 모니터링 포함) */}
+        {/* 3. 참여자 관리 (원래 명단 테이블 형태 유지) */}
         {activeTab === 'participants' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
-                <h1>참여자 관리 & 체중 모니터링</h1>
-                <div className="sub">참여자의 루틴 달성 현황 및 체중·BMI 감량 추이를 종합 관리합니다.</div>
+                <h1>참여자 관리</h1>
+                <div className="sub">회원별 코스 기간(30일/100일)과 만료 및 승인 상태를 관리합니다.</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
                 <button onClick={handleApproveAll} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
@@ -1135,22 +1229,19 @@ export default function AdminPage() {
                 <thead>
                   <tr>
                     <th>이름 (닉네임)</th>
-                    <th style={{ width: '110px' }}>코스 기간</th>
-                    <th>진행 일차</th>
-                    <th>완주 달성</th>
-                    {/* ⭐️ 체중 모니터링 컬럼들 */}
-                    <th>현재 체중 (감량)</th>
-                    <th>BMI 상태</th>
-                    <th>목표 체중</th>
+                    <th style={{ width: '120px' }}>코스 기간</th>
+                    <th>시작(승인)일</th>
+                    <th>현재 진행</th>
+                    <th>완주 달성일</th>
                     <th>상태</th>
                     <th>승인 관리</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading ? (
-                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>로딩 중...</td></tr>
                   ) : participants.length === 0 ? (
-                    <tr><td colSpan={9} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
+                    <tr><td colSpan={7} style={{ textAlign: 'center', padding: '30px' }}>신청자가 없습니다.</td></tr>
                   ) : (
                     participants.map(p => {
                       const isExpired = p.status === 'approved' && p.currentDay > p.duration;
@@ -1159,10 +1250,7 @@ export default function AdminPage() {
                           <td>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                               <div className="avatar-circle">{p.name[0]}</div>
-                              <div>
-                                <strong>{p.name}</strong>
-                                <div style={{ fontSize: '10px', color: '#777' }}>시작: {p.startDate}</div>
-                              </div>
+                              <strong>{p.name}</strong>
                             </div>
                           </td>
                           <td onClick={e => e.stopPropagation()}>
@@ -1184,54 +1272,9 @@ export default function AdminPage() {
                               <option value={100}>100일 코스</option>
                             </select>
                           </td>
+                          <td style={{ color: 'var(--text-mid)' }}>{p.startDate}</td>
                           <td><strong>Day {p.currentDay} / {p.duration}</strong></td>
                           <td style={{ color: 'var(--accent-a)' }}>🔥 {p.streak}일</td>
-
-                          {/* 체중 요약 */}
-                          <td>
-                            {p.latest_weight ? (
-                              <div>
-                                <span style={{ fontWeight: 700, fontSize: '13px' }}>{p.latest_weight} kg</span>
-                                {p.weight_diff !== null && (
-                                  <span style={{
-                                    fontSize: '11px',
-                                    marginLeft: '6px',
-                                    fontWeight: 'bold',
-                                    color: p.weight_diff <= 0 ? '#3FD6A6' : '#FF5E3A',
-                                  }}>
-                                    ({p.weight_diff > 0 ? `+${p.weight_diff}` : p.weight_diff}kg)
-                                  </span>
-                                )}
-                              </div>
-                            ) : (
-                              <span style={{ fontSize: '11px', color: '#666' }}>미기록</span>
-                            )}
-                          </td>
-
-                          {/* BMI 상태 */}
-                          <td>
-                            {p.bmi_info?.bmi ? (
-                              <span style={{
-                                fontSize: '11px',
-                                padding: '2px 8px',
-                                borderRadius: '4px',
-                                backgroundColor: `${p.bmi_info.color}22`,
-                                color: p.bmi_info.color,
-                                border: `1px solid ${p.bmi_info.color}44`,
-                                fontWeight: 'bold',
-                              }}>
-                                {p.bmi_info.bmi} ({p.bmi_info.label})
-                              </span>
-                            ) : (
-                              <span style={{ fontSize: '11px', color: '#666' }}>-</span>
-                            )}
-                          </td>
-
-                          {/* 목표 체중 */}
-                          <td style={{ color: '#aaa', fontSize: '12px' }}>
-                            {p.target_weight ? `${p.target_weight} kg` : '-'}
-                          </td>
-
                           <td>
                             <span className={`status-pill ${p.status === 'approved' ? (isExpired ? 'warn' : 'ok') : 'pending'}`}>
                               {p.status === 'approved' ? (isExpired ? `${p.duration}일 만료` : '진행중') : '입금대기'}
@@ -1259,11 +1302,192 @@ export default function AdminPage() {
             </div>
           </section>
         )}
+
+        {/* ⭐️ 4. 신설된 [체중 모니터링] 탭 (카드 그리드 & 꺾은선 추이 그래프) */}
+        {activeTab === 'weights' && (
+          <section>
+            <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <h1>참여자 체중 모니터링</h1>
+                <div className="sub">참여자별 현재 체중, 목표 체중, BMI 지수 및 감량 추이 그래프를 모니터링합니다.</div>
+              </div>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <input
+                  type="text"
+                  placeholder="회원 이름 검색..."
+                  value={searchName}
+                  onChange={e => setSearchName(e.target.value)}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid #333',
+                    backgroundColor: '#1a1a1a',
+                    color: '#fff',
+                    fontSize: '12px',
+                    outline: 'none',
+                    width: '160px',
+                  }}
+                />
+                <button onClick={fetchParticipants} className="btn-table">🔄 새로고침</button>
+              </div>
+            </div>
+
+            {/* 카드 그리드 영역 */}
+            {filteredWeightUsers.length === 0 ? (
+              <div style={{ padding: '60px', textAlign: 'center', color: '#777', backgroundColor: '#161616', borderRadius: '16px', marginTop: '20px' }}>
+                참여자가 없거나 검색된 회원이 없습니다.
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px', marginTop: '20px' }}>
+                {filteredWeightUsers.map(user => {
+                  const hasRecord = user.latest_weight !== null;
+                  const isSuccessLost = user.weight_diff !== null && user.weight_diff < 0;
+
+                  return (
+                    <div
+                      key={user.id}
+                      onClick={() => setSelectedUser(user)}
+                      style={{
+                        backgroundColor: '#181818',
+                        borderRadius: '16px',
+                        border: '1px solid #282828',
+                        padding: '18px',
+                        cursor: 'pointer',
+                        transition: 'transform 0.15s ease, border-color 0.15s ease',
+                        boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+                      }}
+                      onMouseEnter={e => {
+                        e.currentTarget.style.borderColor = '#3FD6A6';
+                        e.currentTarget.style.transform = 'translateY(-2px)';
+                      }}
+                      onMouseLeave={e => {
+                        e.currentTarget.style.borderColor = '#282828';
+                        e.currentTarget.style.transform = 'translateY(0)';
+                      }}
+                    >
+                      {/* 카드 헤더: 회원 정보 + BMI 배지 */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                          <div className="avatar-circle" style={{ width: '38px', height: '38px', fontSize: '15px' }}>
+                            {user.name[0]}
+                          </div>
+                          <div>
+                            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#fff' }}>
+                              {user.name}
+                            </div>
+                            <div style={{ fontSize: '11px', color: '#888', marginTop: '2px' }}>
+                              Day {user.currentDay} / {user.duration}일 · 🔥 완주 {user.streak}일
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* BMI 배지 */}
+                        {user.bmi_info?.label !== '-' ? (
+                          <div style={{
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            backgroundColor: `${user.bmi_info.color}15`,
+                            color: user.bmi_info.color,
+                            border: `1px solid ${user.bmi_info.color}44`,
+                            fontSize: '11px',
+                            fontWeight: 'bold',
+                            textAlign: 'right',
+                          }}>
+                            BMI {user.bmi_info.bmi} ({user.bmi_info.label})
+                          </div>
+                        ) : (
+                          <span style={{ fontSize: '11px', color: '#666' }}>키 미입력</span>
+                        )}
+                      </div>
+
+                      {/* 3대 핵심 체중 지표 박스 */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', textAlign: 'center', marginBottom: '14px' }}>
+                        <div style={{ backgroundColor: '#202020', padding: '8px 4px', borderRadius: '8px' }}>
+                          <div style={{ fontSize: '10.5px', color: '#888' }}>시작 체중</div>
+                          <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ccc', marginTop: '3px' }}>
+                            {user.initial_weight ? `${user.initial_weight}kg` : '-'}
+                          </div>
+                        </div>
+
+                        <div style={{ backgroundColor: '#202020', padding: '8px 4px', borderRadius: '8px', border: '1px solid #3FD6A633' }}>
+                          <div style={{ fontSize: '10.5px', color: '#3FD6A6', fontWeight: 600 }}>현재 체중</div>
+                          <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#3FD6A6', marginTop: '3px' }}>
+                            {user.latest_weight ? `${user.latest_weight}kg` : '-'}
+                          </div>
+                        </div>
+
+                        <div style={{ backgroundColor: '#202020', padding: '8px 4px', borderRadius: '8px' }}>
+                          <div style={{ fontSize: '10.5px', color: '#888' }}>목표 체중</div>
+                          <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#FF5E3A', marginTop: '3px' }}>
+                            {user.target_weight ? `${user.target_weight}kg` : '-'}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 감량 수치 알림 배너 */}
+                      {user.weight_diff !== null && (
+                        <div style={{
+                          backgroundColor: isSuccessLost ? 'rgba(63, 214, 166, 0.08)' : 'rgba(255, 94, 58, 0.08)',
+                          border: `1px solid ${isSuccessLost ? '#3FD6A622' : '#FF5E3A22'}`,
+                          padding: '8px 12px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: '14px',
+                        }}>
+                          <span style={{ fontSize: '11.5px', color: '#aaa' }}>시작 대비 감량</span>
+                          <span style={{
+                            fontSize: '13px',
+                            fontWeight: 'bold',
+                            color: isSuccessLost ? '#3FD6A6' : '#FF5E3A',
+                          }}>
+                            {user.weight_diff > 0 ? `+${user.weight_diff} kg 증량` : `${Math.abs(user.weight_diff)} kg 감량 중 🎉`}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* ⭐️ 미니 감량 추이 그래프 (SVG) */}
+                      <div style={{ marginBottom: '12px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                          <span style={{ fontSize: '11px', color: '#777' }}>📈 체중 감량 추이</span>
+                          <span style={{ fontSize: '10.5px', color: '#555' }}>
+                            {user.weight_history?.length || 0}회 기록됨
+                          </span>
+                        </div>
+                        <WeightTrendChart history={user.weight_history} targetWeight={user.target_weight} />
+                      </div>
+
+                      {/* 목표 달성률 프로그레스 바 */}
+                      {user.initial_weight && user.target_weight && user.initial_weight > user.target_weight && (
+                        <div style={{ marginTop: '10px' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10.5px', color: '#888', marginBottom: '4px' }}>
+                            <span>목표 감량 달성률</span>
+                            <span style={{ color: '#3FD6A6', fontWeight: 'bold' }}>{user.progress_rate}%</span>
+                          </div>
+                          <div style={{ height: '5px', backgroundColor: '#262626', borderRadius: '3px', overflow: 'hidden' }}>
+                            <div style={{ width: `${user.progress_rate}%`, height: '100%', backgroundColor: '#3FD6A6', borderRadius: '3px', transition: 'width 0.3s ease' }} />
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 카드 하단 날짜 안내 */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', paddingTop: '10px', borderTop: '1px solid #222', fontSize: '11px', color: '#666' }}>
+                        <span>최근 측정: {user.weight_history?.length > 0 ? (user.weight_history[user.weight_history.length - 1].record_date || '-') : '기록 없음'}</span>
+                        <span style={{ color: '#3FD6A6', textDecoration: 'underline' }}>상세 보기 →</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </main>
 
-      {/* 우측 회원 상세 패널 (체중 & BMI 코칭 대시보드 탑재) */}
+      {/* 우측 회원 상세 패널 (공통 서랍) */}
       {selectedUser && (
-        <div className="side-drawer" style={{ width: '400px', overflowY: 'auto' }}>
+        <div className="side-drawer" style={{ width: '420px', overflowY: 'auto' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-mid)' }}>참여자 코칭 상세 정보</div>
             <button className="close-btn" onClick={() => setSelectedUser(null)}>✕</button>
@@ -1279,7 +1503,7 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* ⭐️ [체중 코칭 대시보드 카드] */}
+          {/* 체중 & BMI 코칭 박스 */}
           <div style={{ marginTop: '18px', padding: '16px', backgroundColor: '#181818', borderRadius: '12px', border: '1px solid #2e2e2e' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
               <span style={{ fontSize: '13px', fontWeight: 'bold', color: '#fff' }}>⚖️ 체중 및 비만도(BMI) 분석</span>
@@ -1318,7 +1542,6 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 감량 성과 배너 */}
             {selectedUser.weight_diff !== null && (
               <div style={{
                 backgroundColor: selectedUser.weight_diff <= 0 ? 'rgba(63, 214, 166, 0.1)' : 'rgba(255, 94, 58, 0.1)',
@@ -1345,13 +1568,13 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* ⭐️ [일자별 체중 기록 히스토리 목록] */}
+          {/* 일자별 체중 기록 전체 히스토리 */}
           <div style={{ marginTop: '16px', padding: '14px', backgroundColor: '#181818', borderRadius: '12px', border: '1px solid #2e2e2e' }}>
             <div style={{ fontSize: '12.5px', fontWeight: 'bold', color: '#eee', marginBottom: '10px' }}>
               📋 일자별 체중 기록 이력 ({selectedUser.weight_history?.length || 0}건)
             </div>
 
-            <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            <div style={{ maxHeight: '180px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {selectedUser.weight_history && selectedUser.weight_history.length > 0 ? (
                 [...selectedUser.weight_history].reverse().map((rec: any, idx: number) => (
                   <div
@@ -1419,7 +1642,7 @@ export default function AdminPage() {
             </div>
           </div>
 
-          {/* 승인 취소 버튼 */}
+          {/* 승인 취소 / 승인 버튼 */}
           <div style={{ marginTop: '16px' }}>
             <button
               className="btn-primary"
