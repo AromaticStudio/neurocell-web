@@ -37,11 +37,18 @@ export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [inputPw, setInputPw] = useState('');
   const [activeTab, setActiveTab] = useState<'dashboard' | 'content' | 'participants'>('dashboard');
+  
+  // 콘텐츠 관리 서브 탭 (클래스 vs 딱백미)
+  const [contentSubTab, setContentSubTab] = useState<'health' | 'motivation'>('health');
+  
   const [participants, setParticipants] = useState<any[]>([]);
   const [rawMissionLogs, setRawMissionLogs] = useState<any[]>([]);
   const [dayList, setDayList] = useState<any[]>([]);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+  // 재승인 모달 상태 (실수 복구 vs 새로 시작 선택용)
+  const [reapprovingUser, setReapprovingUser] = useState<any>(null);
 
   // 코치 노트 상태
   const [coachNote, setCoachNote] = useState('');
@@ -94,8 +101,10 @@ export default function AdminPage() {
 
   // 강의 목록 불러오기
   const fetchLectures = async () => {
-    const { data } = await supabase.from('lectures').select('*').order('day', { ascending: true });
-    if (data) setDayList(data);
+    const { data, error } = await supabase.from('lectures').select('*').order('day', { ascending: true });
+    if (!error && data) {
+      setDayList(data);
+    }
   };
 
   // 회원 목록 및 로그 불러오기
@@ -191,53 +200,100 @@ export default function AdminPage() {
     }
   };
 
-  // 승인 / 승인 취소 토글
-  const toggleApproval = async (user: any) => {
-    const isCancelling = user.status === 'approved';
-
-    if (isCancelling) {
+  // ⭐️ [개별 승인/취소 핸들러]
+  const handleApprovalClick = async (user: any) => {
+    // 1. 이미 승인된 회원 ➔ 승인 취소(대기로 변경)
+    if (user.status === 'approved') {
       const ok = confirm(
-        `[승인 취소 / 기수 종료]\n\n` +
-        `'${user.name}' 회원의 승인을 취소하시겠습니까?\n` +
-        `• 루틴 체크(미션 로그)는 다음 기수를 위해 초기화됩니다.\n` +
-        `• 키, 목표체중, 체중 변화 기록은 안전하게 유지됩니다.`
+        `[승인 취소 (대기 전환)]\n\n` +
+        `'${user.name}' 회원의 상태를 '입금 대기'로 전환하시겠습니까?\n\n` +
+        `※ 안전 보존: 회원의 미션 인증 기록과 진행 일차는 삭제되지 않고 안전하게 유지됩니다.`
       );
       if (!ok) return;
+
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .update({ status: 'pending' }) // 날짜(approved_at)와 미션로그는 보존!
+          .eq('id', user.id);
+
+        if (error) throw error;
+
+        alert(`'${user.name}' 회원이 대기 상태로 변경되었습니다. (기존 데이터 안전 보존됨)`);
+        await fetchParticipants();
+        if (selectedUser?.id === user.id) setSelectedUser(null);
+      } catch (err: any) {
+        alert(`처리 실패: ${err.message}`);
+      }
+      return;
     }
 
-    const nextStatus = isCancelling ? 'pending' : 'approved';
-    const updateData: any = {
-      status: nextStatus,
-      approved_at: nextStatus === 'approved' ? new Date().toISOString() : null,
-    };
+    // 2. 대기 상태인 회원 ➔ 승인하기
+    // 과거에 승인받아 진행했던 이력(rawApprovedAt)이 있는 경우: 선택 팝업 모달 오픈
+    if (user.rawApprovedAt) {
+      setReapprovingUser(user);
+    } else {
+      // 최초 신규 참가자: 바로 오늘부터 Day 1로 승인
+      await executeDirectApprove(user.id, new Date().toISOString(), false);
+    }
+  };
+
+  // 재승인 실행 함수 (기존 유지 vs 새로 시작)
+  const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
+    if (!reapprovingUser) return;
+    const user = reapprovingUser;
 
     try {
-      const { error: pError } = await supabase
-        .from('profiles')
-        .update(updateData)
-        .eq('id', user.id);
+      if (mode === 'resume') {
+        // 기존 진행 유지: 원래 날짜 그대로 유지하고 상태만 approved로 변경
+        const { error } = await supabase
+          .from('profiles')
+          .update({ status: 'approved' })
+          .eq('id', user.id);
 
-      if (pError) throw pError;
+        if (error) throw error;
+        alert(`'${user.name}' 회원의 이전 진행 일차(Day ${user.currentDay})와 루틴 기록이 안전하게 복구되었습니다!`);
+      } else {
+        // 새로 시작 (리셋): 오늘 날짜로 새로 세팅하고 이전 미션 로그 비우기
+        const { error: pError } = await supabase
+          .from('profiles')
+          .update({ status: 'approved', approved_at: new Date().toISOString() })
+          .eq('id', user.id);
 
-      if (isCancelling) {
-        await supabase
-          .from('mission_logs')
-          .delete()
-          .eq('user_id', user.id);
+        if (pError) throw pError;
+
+        // 새 기수 시작이므로 이전 미션 로그 삭제
+        await supabase.from('mission_logs').delete().eq('user_id', user.id);
+
+        alert(`'${user.name}' 회원이 오늘부터 Day 1로 새 기수를 시작합니다. (이전 로그 초기화 완료)`);
       }
 
+      setReapprovingUser(null);
       await fetchParticipants();
-      alert(
-        nextStatus === 'approved'
-          ? `${user.name}님이 승인되었습니다. (Day 1 시작)`
-          : `${user.name}님의 승인이 취소되고 이전 미션 로그가 깔끔하게 초기화되었습니다.`
-      );
-
-      if (selectedUser?.id === user.id) {
-        setSelectedUser(null);
-      }
+      if (selectedUser?.id === user.id) setSelectedUser(null);
     } catch (err: any) {
       alert(`처리 실패: ${err.message}`);
+    }
+  };
+
+  // 신규 회원 직접 승인 함수
+  const executeDirectApprove = async (userId: string, approvedAtDate: string, clearLogs: boolean) => {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ status: 'approved', approved_at: approvedAtDate })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      if (clearLogs) {
+        await supabase.from('mission_logs').delete().eq('user_id', userId);
+      }
+
+      alert('참가자가 정상 승인되었습니다. (Day 1 시작)');
+      await fetchParticipants();
+    } catch (err: any) {
+      alert(`승인 실패: ${err.message}`);
     }
   };
 
@@ -280,7 +336,7 @@ export default function AdminPage() {
       return;
     }
 
-    if (!confirm(`현재 입금 대기 중인 ${pendingUsers.length}명을 모두 승인하시겠습니까?`)) {
+    if (!confirm(`현재 입금 대기 중인 ${pendingUsers.length}명을 모두 승인하시겠습니까?\n(새로운 신청자는 오늘부터 Day 1로 시작됩니다)`)) {
       return;
     }
 
@@ -291,27 +347,29 @@ export default function AdminPage() {
         .update({ status: 'approved', approved_at: new Date().toISOString() })
         .in('id', pendingIds);
 
-      if (error) {
-        alert(`일괄 승인 실패: ${error.message}`);
-      } else {
-        await fetchParticipants();
-        alert(`${pendingUsers.length}명이 모두 승인되었습니다.`);
-      }
+      if (error) throw error;
+
+      await fetchParticipants();
+      alert(`${pendingUsers.length}명이 모두 승인되었습니다.`);
     } catch (err: any) {
-      alert(`오류: ${err.message}`);
+      alert(`일괄 승인 실패: ${err.message}`);
     }
   };
 
-  // 전체 기수 일괄 종료
+  // ⭐️ [전체 기수 일괄 종료(초기화)]: 다음 기수를 위해 미션 로그를 깨끗하게 비우는 본래 기능 유지!
   const handleResetAll = async () => {
     const approvedUsers = participants.filter(p => p.status === 'approved');
     if (approvedUsers.length === 0) {
-      alert('승인 취소할 회원이 없습니다.');
+      alert('종료할 승인 회원이 없습니다.');
       return;
     }
 
     if (!confirm(
-      `[기수 일괄 종료]\n\n승인된 회원 ${approvedUsers.length}명을 모두 대기 상태로 되돌리고, 각 회원의 미션 로그를 초기화하시겠습니까?\n(키, 체중 기록은 안전하게 보존됩니다.)`
+      `🚫 [전체 기수 일괄 종료 및 초기화]\n\n` +
+      `현재 진행 중인 ${approvedUsers.length}명의 기수를 모두 종료하시겠습니까?\n\n` +
+      `• 모든 승인 회원의 상태가 '입금 대기'로 전환됩니다.\n` +
+      `• 다음 기수 맞이를 위해 모든 미션 체크 로그(mission_logs)가 깨끗이 초기화(삭제)됩니다.\n` +
+      `• (회원의 키, 목표체중, 체중 변화 기록은 안전하게 보존됩니다)`
     )) {
       return;
     }
@@ -319,6 +377,7 @@ export default function AdminPage() {
     try {
       const approvedIds = approvedUsers.map(p => p.id);
 
+      // 1. 상태를 대기로 바꾸고 승인일 초기화
       const { error } = await supabase
         .from('profiles')
         .update({ status: 'pending', approved_at: null })
@@ -326,13 +385,14 @@ export default function AdminPage() {
 
       if (error) throw error;
 
+      // 2. 미션 로그 깨끗하게 삭제 (서버 찌꺼기 방지)
       await supabase
         .from('mission_logs')
         .delete()
         .in('user_id', approvedIds);
 
       await fetchParticipants();
-      alert('모든 회원의 기수가 종료되고 미션 기록이 초기화되었습니다.');
+      alert('모든 회원의 기수가 종료되고 미션 체크 기록이 깔끔하게 초기화되었습니다.');
     } catch (err: any) {
       alert(`일괄 취소 실패: ${err.message}`);
     }
@@ -340,19 +400,21 @@ export default function AdminPage() {
 
   // 신규 영상 등록 모달 열기
   const handleOpenNewLectureModal = () => {
-    const nextDay = dayList.length > 0 ? Math.max(...dayList.map(d => d.day)) + 1 : 1;
+    const targetList = dayList.filter(d => (d.category || 'health') === contentSubTab);
+    const nextDay = targetList.length > 0 ? Math.max(...targetList.map(d => d.day)) + 1 : 1;
+
     setEditingLecture({
       day: nextDay,
       week: `Week ${Math.ceil(nextDay / 7)}`,
       title: '',
       video_url: '',
       description: '',
-      category: 'health',
+      category: contentSubTab,
     });
     setIsNewLecture(true);
   };
 
-  // 강의 내용 저장
+  // 영상 내용 저장 (고유 ID 기준 update)
   const handleSaveLecture = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingLecture) return;
@@ -364,26 +426,49 @@ export default function AdminPage() {
     setIsSavingLecture(true);
 
     try {
-      const { error } = await supabase
-        .from('lectures')
-        .upsert({
-          day: Number(editingLecture.day),
-          week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
-          title: editingLecture.title || `Day ${editingLecture.day} 영상`,
-          video_url: editingLecture.video_url || '',
-          description: editingLecture.description || '',
-          category: editingLecture.category || 'health',
-        }, { onConflict: 'day' });
+      const lectureData = {
+        day: Number(editingLecture.day),
+        week: editingLecture.week || `Week ${Math.ceil(Number(editingLecture.day) / 7)}`,
+        title: editingLecture.title || `Day ${editingLecture.day} 영상`,
+        video_url: editingLecture.video_url?.trim() || '',
+        description: editingLecture.description?.trim() || '',
+        category: editingLecture.category || 'health',
+      };
 
-      if (error) {
-        alert(`저장 실패: ${error.message}`);
+      if (!isNewLecture && editingLecture.id) {
+        const { error } = await supabase
+          .from('lectures')
+          .update(lectureData)
+          .eq('id', editingLecture.id);
+
+        if (error) throw error;
       } else {
-        alert(`Day ${editingLecture.day} 영상이 저장되었습니다.`);
-        setEditingLecture(null);
-        fetchLectures();
+        const { data: existing } = await supabase
+          .from('lectures')
+          .select('id')
+          .eq('day', Number(editingLecture.day))
+          .eq('category', editingLecture.category || 'health')
+          .maybeSingle();
+
+        if (existing) {
+          const { error } = await supabase
+            .from('lectures')
+            .update(lectureData)
+            .eq('id', existing.id);
+          if (error) throw error;
+        } else {
+          const { error } = await supabase
+            .from('lectures')
+            .insert([lectureData]);
+          if (error) throw error;
+        }
       }
+
+      alert(`[Day ${editingLecture.day}] 영상이 성공적으로 저장되었습니다!`);
+      setEditingLecture(null);
+      await fetchLectures();
     } catch (err: any) {
-      alert(`오류: ${err.message}`);
+      alert(`저장 실패: ${err.message}`);
     } finally {
       setIsSavingLecture(false);
     }
@@ -396,15 +481,18 @@ export default function AdminPage() {
     }
 
     try {
-      const { error } = await supabase
-        .from('lectures')
-        .delete()
-        .eq('day', lecture.day);
+      let query = supabase.from('lectures').delete();
+      if (lecture.id) {
+        query = query.eq('id', lecture.id);
+      } else {
+        query = query.eq('day', lecture.day).eq('category', lecture.category || 'health');
+      }
 
+      const { error } = await query;
       if (error) throw error;
 
       alert(`Day ${lecture.day} 영상이 삭제되었습니다.`);
-      fetchLectures();
+      await fetchLectures();
     } catch (err: any) {
       alert(`삭제 실패: ${err.message}`);
     }
@@ -447,6 +535,14 @@ export default function AdminPage() {
     return inactiveList;
   }, [participants, rawMissionLogs]);
 
+  // 콘텐츠 서브 탭 필터링 목록
+  const filteredLectures = useMemo(() => {
+    return dayList.filter(d => {
+      const cat = d.category || 'health';
+      return cat === contentSubTab;
+    });
+  }, [dayList, contentSubTab]);
+
   if (!isAuthenticated) {
     return (
       <main style={{ minHeight: '100vh', backgroundColor: '#000', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
@@ -474,9 +570,79 @@ export default function AdminPage() {
 
   return (
     <div className="admin-shell">
+      {/* ⭐️ 재승인 선택 모달 (실수 복구 vs 새로 시작 선택) */}
+      {reapprovingUser && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+          <div style={{ width: '100%', maxWidth: '420px', backgroundColor: '#1c1c1c', borderRadius: '20px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box', textAlign: 'center' }}>
+            <div style={{ fontSize: '36px', marginBottom: '10px' }}>🛡️</div>
+            <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#fff', margin: '0 0 8px 0' }}>
+              '{reapprovingUser.name}' 승인 방식 선택
+            </h3>
+            <p style={{ fontSize: '13px', color: '#aaa', lineHeight: 1.5, margin: '0 0 20px 0' }}>
+              이전에 승인된 이력이 있는 회원입니다.<br />
+              어떤 방식으로 승인하시겠습니까?
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+              {/* 옵션 1: 기존 진행 유지 (실수 복구) */}
+              <button
+                type="button"
+                onClick={() => executeReapproveChoice('resume')}
+                style={{
+                  padding: '14px 16px',
+                  borderRadius: '12px',
+                  backgroundColor: 'rgba(63, 214, 166, 0.15)',
+                  border: '1px solid #3FD6A6',
+                  color: '#3FD6A6',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
+                  ↩️ 기존 진행 유지 (Day {reapprovingUser.currentDay} 복구)
+                </div>
+                <div style={{ fontSize: '11.5px', color: '#bbb', marginTop: '4px', lineHeight: 1.4 }}>
+                  실수로 승인을 취소했거나 일시 중단했던 경우 선택하세요. (기존 루틴 체크 기록과 진행 일차 유지)
+                </div>
+              </button>
+
+              {/* 옵션 2: 새 기수 시작 (Day 1 리셋) */}
+              <button
+                type="button"
+                onClick={() => executeReapproveChoice('reset')}
+                style={{
+                  padding: '14px 16px',
+                  borderRadius: '12px',
+                  backgroundColor: '#262626',
+                  border: '1px solid #444',
+                  color: '#fff',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ fontSize: '14px', fontWeight: 'bold' }}>
+                  🌱 새로운 기수로 시작 (Day 1 리셋)
+                </div>
+                <div style={{ fontSize: '11.5px', color: '#888', marginTop: '4px', lineHeight: 1.4 }}>
+                  새로운 챌린지 기수를 완전히 처음부터 시작할 때 선택하세요. (오늘부터 Day 1, 이전 미션 로그 비움)
+                </div>
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setReapprovingUser(null)}
+              style={{ padding: '8px 16px', borderRadius: '8px', border: 'none', backgroundColor: 'transparent', color: '#777', fontSize: '12px', cursor: 'pointer' }}
+            >
+              닫기 (취소)
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* 강의 등록 및 수정 모달 */}
       {editingLecture && (
-        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.85)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
           <form onSubmit={handleSaveLecture} style={{ width: '100%', maxWidth: '460px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #333', padding: '24px', boxSizing: 'border-box' }}>
             <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '16px', color: '#fff' }}>
               {isNewLecture ? '➕ 새 영상 등록' : `Day ${editingLecture.day} 영상 수정`}
@@ -600,6 +766,7 @@ export default function AdminPage() {
 
       {/* 본문 */}
       <main className="admin-main">
+        {/* 대시보드 */}
         {activeTab === 'dashboard' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -628,7 +795,7 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* 코치 노트 편집 패널 (링크 입력창 제거로 간결화) */}
+            {/* 코치 노트 편집 패널 */}
             <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
@@ -691,7 +858,7 @@ export default function AdminPage() {
                         <div style={{ fontWeight: 'bold' }}>{p.name}</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-mid)' }}>신청일: {p.startDate} ({p.duration}일 코스)</div>
                       </div>
-                      <button className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000' }} onClick={() => toggleApproval(p)}>
+                      <button className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000' }} onClick={() => handleApprovalClick(p)}>
                         승인하기
                       </button>
                     </div>
@@ -751,58 +918,136 @@ export default function AdminPage() {
           </section>
         )}
 
-        {/* 콘텐츠 관리 */}
+        {/* 콘텐츠 관리 (서브 탭 분리) */}
         {activeTab === 'content' && (
           <section>
             <div className="admin-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h1>콘텐츠 관리</h1>
-                <div className="sub">클래스 및 딱백미 영상을 직접 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
+                <div className="sub">클래스와 딱백미 영상을 분리하여 등록·관리합니다. (참여자 Day에 맞춰 자동 해금됩니다)</div>
               </div>
               <div style={{ display: 'flex', gap: '8px' }}>
-                <button onClick={handleOpenNewLectureModal} className="btn-table" style={{ backgroundColor: '#3FD6A6', color: '#000', fontWeight: 700 }}>
-                  ➕ 새 영상 등록하기
+                <button
+                  onClick={handleOpenNewLectureModal}
+                  className="btn-table"
+                  style={{
+                    backgroundColor: contentSubTab === 'motivation' ? '#FF5E3A' : '#3FD6A6',
+                    color: contentSubTab === 'motivation' ? '#fff' : '#000',
+                    fontWeight: 700,
+                  }}
+                >
+                  ➕ {contentSubTab === 'motivation' ? '새 딱백미 영상 등록' : '새 클래스 영상 등록'}
                 </button>
                 <button onClick={fetchLectures} className="btn-table">🔄 새로고침</button>
               </div>
+            </div>
+
+            {/* 상단 서브 탭 전환 버튼 */}
+            <div style={{ display: 'flex', gap: '8px', margin: '20px 0 16px' }}>
+              <button
+                type="button"
+                onClick={() => setContentSubTab('health')}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: '10px',
+                  border: contentSubTab === 'health' ? '1px solid #3FD6A6' : '1px solid #333',
+                  backgroundColor: contentSubTab === 'health' ? '#3FD6A618' : '#181818',
+                  color: contentSubTab === 'health' ? '#3FD6A6' : '#888',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>🎓</span> 건강 클래스 ({dayList.filter(d => (!d.category || d.category === 'health')).length}개)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setContentSubTab('motivation')}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: '10px',
+                  border: contentSubTab === 'motivation' ? '1px solid #FF5E3A' : '1px solid #333',
+                  backgroundColor: contentSubTab === 'motivation' ? '#FF5E3A18' : '#181818',
+                  color: contentSubTab === 'motivation' ? '#FF5E3A' : '#888',
+                  fontSize: '13px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                }}
+              >
+                <span>🔥</span> 딱백미 (동기부여) ({dayList.filter(d => d.category === 'motivation').length}개)
+              </button>
             </div>
 
             <div className="table-wrap">
               <table className="admin-table">
                 <thead>
                   <tr>
-                    <th style={{ width: '70px' }}>Day</th>
-                    <th style={{ width: '120px' }}>분류</th>
+                    <th style={{ width: '80px' }}>Day</th>
                     <th style={{ width: '100px' }}>주차</th>
-                    <th>강의/영상 제목</th>
+                    <th>영상 제목 및 가이드 요약</th>
                     <th style={{ width: '110px' }}>영상 상태</th>
+                    <th style={{ width: '200px' }}>유튜브 링크 / 미리보기</th>
                     <th style={{ width: '130px', textAlign: 'center' }}>관리</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {dayList.length === 0 ? (
-                    <tr><td colSpan={6} style={{ textAlign: 'center', padding: '30px' }}>등록된 영상이 없습니다. [+ 새 영상 등록하기]를 눌러보세요.</td></tr>
+                  {filteredLectures.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: '#777' }}>
+                        {contentSubTab === 'motivation'
+                          ? '등록된 딱백미 영상이 없습니다. 우측 상단의 [+ 새 딱백미 영상 등록]을 눌러보세요.'
+                          : '등록된 건강 클래스 영상이 없습니다. 우측 상단의 [+ 새 클래스 영상 등록]을 눌러보세요.'}
+                      </td>
+                    </tr>
                   ) : (
-                    dayList.map(d => (
-                      <tr key={d.day}>
-                        <td><strong>Day {d.day}</strong></td>
+                    filteredLectures.map(d => (
+                      <tr key={d.id || `${d.category}_${d.day}`}>
                         <td>
-                          {d.category === 'motivation' ? (
-                            <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#FF5E3A22', color: '#FF5E3A', fontWeight: 'bold' }}>
-                              🔥 딱백미
-                            </span>
-                          ) : (
-                            <span style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '10px', backgroundColor: '#3FD6A622', color: '#3FD6A6' }}>
-                              🎓 클래스
-                            </span>
-                          )}
+                          <strong style={{ color: contentSubTab === 'motivation' ? '#FF5E3A' : '#3FD6A6' }}>
+                            Day {d.day}
+                          </strong>
                         </td>
                         <td style={{ color: 'var(--text-mid)' }}>{d.week}</td>
-                        <td>{d.title}</td>
+                        <td>
+                          <div style={{ fontWeight: 600, color: '#fff', fontSize: '13px' }}>{d.title}</div>
+                          {d.description && (
+                            <div style={{ fontSize: '11px', color: '#888', marginTop: '4px', lineHeight: 1.4 }}>
+                              {d.description}
+                            </div>
+                          )}
+                        </td>
                         <td>
                           <span className={`status-pill ${d.video_url ? 'ok' : 'pending'}`}>
                             {d.video_url ? '영상 등록됨' : '영상 미등록'}
                           </span>
+                        </td>
+                        <td>
+                          {d.video_url ? (
+                            <a
+                              href={d.video_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                fontSize: '12px',
+                                color: '#3FD6A6',
+                                textDecoration: 'underline',
+                              }}
+                            >
+                              ▶ 영상 바로보기
+                            </a>
+                          ) : (
+                            <span style={{ fontSize: '11px', color: '#666' }}>-</span>
+                          )}
                         </td>
                         <td style={{ textAlign: 'center' }}>
                           <div style={{ display: 'flex', justifyContent: 'center', gap: '6px' }}>
@@ -916,7 +1161,7 @@ export default function AdminPage() {
                                 color: p.status === 'approved' ? '#888' : '#000',
                                 fontWeight: 600,
                               }}
-                              onClick={() => toggleApproval(p)}
+                              onClick={() => handleApprovalClick(p)}
                             >
                               {p.status === 'approved' ? '승인 취소' : '✓ 승인하기'}
                             </button>
@@ -1006,9 +1251,9 @@ export default function AdminPage() {
                 backgroundColor: selectedUser.status === 'approved' ? '#333' : '#3FD6A6',
                 color: selectedUser.status === 'approved' ? '#fff' : '#000',
               }}
-              onClick={() => toggleApproval(selectedUser)}
+              onClick={() => handleApprovalClick(selectedUser)}
             >
-              {selectedUser.status === 'approved' ? '승인 취소 (미션 로그만 리셋)' : '✓ 승인하기 (Day 1 시작)'}
+              {selectedUser.status === 'approved' ? '승인 취소 (대기로 변경)' : '✓ 승인하기'}
             </button>
           </div>
 
