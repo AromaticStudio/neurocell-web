@@ -166,54 +166,10 @@ export default function AdminPage() {
   const [reapprovingUser, setReapprovingUser] = useState<any>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // 코치 노트 상태
-  const [coachNote, setCoachNote] = useState('');
-  const [savingNote, setSavingNote] = useState(false);
-
   // 강의 등록/수정 모달 상태
   const [editingLecture, setEditingLecture] = useState<any>(null);
   const [isNewLecture, setIsNewLecture] = useState(false);
   const [isSavingLecture, setIsSavingLecture] = useState(false);
-
-  // 코치 노트 불러오기
-  const fetchCoachNote = async () => {
-    const { data } = await supabase
-      .from('app_settings')
-      .select('value')
-      .eq('key', 'coach_note')
-      .maybeSingle();
-
-    if (data?.value) {
-      setCoachNote(data.value);
-    }
-  };
-
-  // 코치 노트 저장하기
-  const handleSaveCoachNote = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!coachNote.trim()) {
-      alert('코치 노트 내용을 입력해 주세요.');
-      return;
-    }
-
-    setSavingNote(true);
-    try {
-      const { error } = await supabase
-        .from('app_settings')
-        .upsert({
-          key: 'coach_note',
-          value: coachNote.trim(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'key' });
-
-      if (error) throw error;
-      alert('코치 노트가 성공적으로 업데이트되었습니다!\n(모든 회원의 투데이 화면에 즉시 반영됩니다)');
-    } catch (err: any) {
-      alert(`저장 실패: ${err.message}`);
-    } finally {
-      setSavingNote(false);
-    }
-  };
 
   // 강의 목록 불러오기
   const fetchLectures = async () => {
@@ -330,7 +286,6 @@ export default function AdminPage() {
     if (isAuthenticated) {
       fetchParticipants();
       fetchLectures();
-      fetchCoachNote();
     }
   }, [isAuthenticated]);
 
@@ -597,7 +552,6 @@ export default function AdminPage() {
         category: editingLecture.category || 'health',
       };
 
-      // ⭐️ [핵심] 기존 영상 수정 모드: 고유 id가 있으므로 Day 번호를 1에서 5로 바꿔도 그 자리에서 안전하게 수정됨!
       if (!isNewLecture && editingLecture.id) {
         const { error: updateError } = await supabase
           .from('lectures')
@@ -606,9 +560,7 @@ export default function AdminPage() {
 
         if (updateError) throw updateError;
         alert(`영상 내용이 성공적으로 수정되었습니다!`);
-      } 
-      // ⭐️ [신규 등록 모드]: 완전히 새로 추가할 때만 INSERT
-      else {
+      } else {
         const { error: insertError } = await supabase
           .from('lectures')
           .insert([lecturePayload]);
@@ -939,7 +891,7 @@ export default function AdminPage() {
                 <h1>대시보드</h1>
                 <div className="sub">개인별 루틴 진행 현황 · {toKSTDateString()} 기준</div>
               </div>
-              <button onClick={() => { fetchParticipants(); fetchCoachNote(); }} className="btn-table">🔄 새로고침</button>
+              <button onClick={() => fetchParticipants()} className="btn-table">🔄 새로고침</button>
             </div>
 
             <div className="kpi-grid">
@@ -958,56 +910,6 @@ export default function AdminPage() {
                 <div className="val">{approvedCount}명</div>
                 <div className="delta up">개인 진도 진행 중</div>
               </div>
-            </div>
-
-            {/* 코치 노트 패널 (기존 원본 유지) */}
-            <div style={{ marginTop: '20px', backgroundColor: '#181818', borderRadius: '16px', border: '1px solid #2a2a2a', padding: '18px 20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <h3 style={{ fontSize: '14px', fontWeight: 'bold', margin: 0, color: '#fff' }}>
-                  📝 COACH'S NOTE (회원 전체 공지 / 응원 문구)
-                </h3>
-                <span style={{ fontSize: '11px', color: '#3FD6A6' }}>투데이 탭 하단 실시간 노출</span>
-              </div>
-              <form onSubmit={handleSaveCoachNote}>
-                <textarea
-                  rows={2}
-                  value={coachNote}
-                  onChange={e => setCoachNote(e.target.value)}
-                  placeholder="회원들의 투데이 화면에 띄울 오늘의 응원 메시지나 공지사항을 입력해 주세요."
-                  style={{
-                    width: '100%',
-                    padding: '12px 14px',
-                    borderRadius: '10px',
-                    border: '1px solid #333',
-                    backgroundColor: '#111',
-                    color: '#fff',
-                    fontSize: '13px',
-                    lineHeight: 1.5,
-                    boxSizing: 'border-box',
-                    outline: 'none',
-                    resize: 'none',
-                    marginBottom: '10px',
-                  }}
-                />
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="submit"
-                    disabled={savingNote}
-                    style={{
-                      padding: '8px 16px',
-                      borderRadius: '8px',
-                      backgroundColor: '#3FD6A6',
-                      color: '#000',
-                      fontWeight: 700,
-                      fontSize: '12px',
-                      border: 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {savingNote ? '저장 중...' : '✓ 코치 노트 업데이트'}
-                  </button>
-                </div>
-              </form>
             </div>
 
             <div className="two-col" style={{ marginTop: '20px' }}>
