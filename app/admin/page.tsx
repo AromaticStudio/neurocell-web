@@ -242,56 +242,68 @@ export default function AdminPage() {
     }
   };
 
-  // ⭐️ [재승인 선택 실행 함수: 확실하게 업데이트 반영]
+ // ⭐️ [재승인 실행 함수 - 무조건 approved로 확실하게 변경]
   const executeReapproveChoice = async (mode: 'resume' | 'reset') => {
     if (!reapprovingUser || isProcessing) return;
     setIsProcessing(true);
     const user = reapprovingUser;
 
     try {
-      if (mode === 'resume') {
-        // 기존 진행 유지:
-        // 혹시 approved_at이 비어있으면 오늘 날짜를 넣어주고, 있으면 기존 날짜 유지
-        const updatePayload: any = {
+      let targetApprovedAt = user.rawApprovedAt;
+
+      // 만약 기존 날짜가 비어있거나, 새로 시작(reset)을 선택한 경우 오늘 날짜로 세팅
+      if (mode === 'reset' || !targetApprovedAt) {
+        targetApprovedAt = new Date().toISOString();
+      }
+
+      console.log('승인 시도 유저 ID:', user.id, '새 상태: approved', '날짜:', targetApprovedAt);
+
+      const { data, error } = await supabase
+        .from('profiles')
+        .update({
           status: 'approved',
-        };
-        if (!user.rawApprovedAt) {
-          updatePayload.approved_at = new Date().toISOString();
-        }
+          approved_at: targetApprovedAt,
+        })
+        .eq('id', user.id)
+        .select(); // 👈 실제로 업데이트가 반영되었는지 바로 확인
 
-        const { error } = await supabase
-          .from('profiles')
-          .update(updatePayload)
-          .eq('id', user.id);
+      if (error) {
+        throw new Error(`DB 업데이트 실패: ${error.message} (${error.details || ''})`);
+      }
 
-        if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('Supabase RLS(보안 정책) 권한 문제로 데이터가 수정되지 않았습니다. Supabase SQL 에디터에서 update 정책을 확인해주세요.');
+      }
 
-        alert(`'${user.name}' 회원의 진행(Day ${user.currentDay})이 정상 승인되었습니다!`);
-      } else {
-        // 새로 시작 (Day 1 리셋):
-        const { error: pError } = await supabase
-          .from('profiles')
-          .update({
-            status: 'approved',
-            approved_at: new Date().toISOString(),
-          })
-          .eq('id', user.id);
-
-        if (pError) throw pError;
-
-        // 새 기수 시작이므로 이전 미션 로그 삭제
+      // 새로 시작일 경우에만 미션 로그 비우기
+      if (mode === 'reset') {
         await supabase.from('mission_logs').delete().eq('user_id', user.id);
-
-        alert(`'${user.name}' 회원이 오늘부터 Day 1로 새 기수를 시작합니다.`);
       }
 
+      // 화면 상태 즉각 수동 동기화 (새로고침 대기 없이 화면에 바로 반영)
+      setParticipants(prev =>
+        prev.map(p =>
+          p.id === user.id
+            ? {
+                ...p,
+                status: 'approved',
+                rawApprovedAt: targetApprovedAt,
+                startDate: toKSTDateString(targetApprovedAt),
+                currentDay: calculateAdminUserDay(targetApprovedAt),
+              }
+            : p
+        )
+      );
+
+      alert(`'${user.name}' 회원이 성공적으로 승인되었습니다!`);
       setReapprovingUser(null);
-      await fetchParticipants();
-      if (selectedUser?.id === user.id) {
-        setSelectedUser(null);
-      }
+      if (selectedUser?.id === user.id) setSelectedUser(null);
+      
+      // 최신 데이터 다시 fetch
+      fetchParticipants();
     } catch (err: any) {
-      alert(`승인 처리 실패: ${err.message}`);
+      console.error(err);
+      alert(`[승인 오류 발생]\n${err.message}`);
     } finally {
       setIsProcessing(false);
     }
